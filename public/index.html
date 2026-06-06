@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Daily News Brief</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="masthead">
+        <div>
+          <p class="kicker">Morning Desk</p>
+          <h1>Daily News Brief</h1>
+          <p class="lede">Choose topics, keywords, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
+        </div>
+        <button id="runNow" class="primary-button" type="button">
+          <span>Generate Now</span>
+        </button>
+      </section>
+
+      <section class="workspace">
+        <form id="settingsForm" class="panel settings-panel">
+          <div class="panel-heading">
+            <h2>Send Settings</h2>
+            <button class="save-button" type="submit">Save</button>
+          </div>
+
+          <label class="field">
+            <span>Sender Email</span>
+            <input id="senderEmail" type="email" placeholder="lilianhe347208@gmail.com" />
+          </label>
+
+          <label class="field">
+            <span>Recipient Email</span>
+            <input id="recipientEmail" type="email" placeholder="zh2652@barnard.edu" />
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>Daily Send Time</span>
+              <input id="sendTime" type="time" />
+            </label>
+          </div>
+
+          <div class="category-header">
+            <h2>News Topics</h2>
+            <button id="addCategory" class="ghost-button" type="button">Add Topic</button>
+          </div>
+          <div id="categories" class="category-list"></div>
+        </form>
+
+        <aside class="panel preview-panel">
+          <div class="panel-heading">
+            <h2>Generated Result</h2>
+            <span id="status" class="status-pill">Ready</span>
+          </div>
+          <div id="preview" class="preview-empty">
+            Save your settings, then click "Generate Now" to test once. If Gmail sending is not available, this area will show a preview.
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <template id="categoryTemplate">
+      <article class="category-card">
+        <div class="category-top">
+          <label class="switch">
+            <input class="category-enabled" type="checkbox" />
+            <span></span>
+          </label>
+          <input class="category-name" type="text" />
+          <label class="count-field" title="How many articles to collect for this topic">
+            <span>Count</span>
+            <input class="category-count" type="number" min="1" max="10" />
+          </label>
+          <button class="icon-button remove-category" type="button" aria-label="Remove">×</button>
+        </div>
+        <label class="field compact">
+          <span>Keywords, separated by commas</span>
+          <textarea class="category-keywords" rows="2"></textarea>
+        </label>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
