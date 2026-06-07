@@ -4,6 +4,10 @@
 - This file is the current project instruction file.
 - The old `agent.md` file is an outdated design draft and should not be used as the source of current requirements.
 - News items must come from the last 10 days only.
+- Generated news should not repeat articles used in the last 10 days.
+- If Google News has too few non-repeated results, the app should expand to category-matched official RSS sources from other websites.
+- If no unique article is found after expanded search, the app should not repeat old news as filler.
+- The server should log its app version, loaded `server.js` modified time, and process start time at startup so stale background processes are easy to detect.
 
 ## News Writing Rules
 
@@ -35,19 +39,20 @@ Keep the same page structure:
 
 ### Summary Length and Usefulness
 
-- Each news summary must be exactly 5 or 6 sentences.
-- This is an enforced rule, not a suggestion.
-- A summary with fewer than 5 sentences or more than 6 sentences is invalid.
-- The program must count sentences after AI generation.
-- If a generated summary fails the sentence-count check, the program must send it back for revision or regenerate it.
-- The final page must only show summaries that pass this check.
-- The summary must be long enough to help the reader understand the news.
-- Do not write only 2-3 general sentences.
+- Each news summary should be detailed enough to explain the news clearly.
+- The summary should usually be about 90-130 simple English words when the article data supports it.
+- Do not optimize for sentence count. Focus on useful information.
+- A summary with fewer than 70 words is invalid unless no article data exists.
+- The program must check summary length after AI generation.
+- If a generated summary is too short, the program must send it back for revision or regenerate it.
+- The final page must only show summaries that pass this detail check.
+- The summary must be long enough to help the reader understand the news without opening the link.
+- Do not write a short 2-3 sentence summary.
 - The summary should explain what happened, who or what is involved, why it matters, what is new or important, and what the reader should understand from it.
-- The 5-6 sentences should explain: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next if the article supports it.
-- Each news item should internally cover: what happened, key details, why it matters, what is new or useful, and what to watch next if the article supports it.
-- Each sentence must add useful information.
-- Do not add filler sentences just to reach 5 sentences.
+- The summary should explain as many of these points as the article data supports: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next.
+- Include 4-6 concrete information points when supported by the article data.
+- Each information point should add useful information.
+- Do not add filler just to reach the target length.
 - The final summary can be one natural paragraph.
 - Do not mention the source name or publication time inside the summary.
 - Do not write filler such as "the article was published by," "the report says," or "according to the source."
@@ -117,7 +122,8 @@ Before saving or displaying the final news page, the program should check:
 
 - Is the whole page in English?
 - Is there any Chinese text left?
-- Does each summary have exactly 5 or 6 sentences?
+- Is each summary detailed enough, usually about 90-130 simple English words when the article data supports it?
+- Does each summary avoid being only 2-3 general sentences?
 - Are the sentences simple and clear?
 - Is each summary specific enough?
 - Does each summary explain what the news is about?

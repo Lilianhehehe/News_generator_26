@@ -1,6 +1,6 @@
 import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync, createReadStream, readFileSync } from "node:fs";
+import { existsSync, createReadStream, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tls from "node:tls";
@@ -21,6 +21,10 @@ const OPENAI_MAX_OUTPUT_TOKENS = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 
 const OPENAI_MAX_REWRITE_ATTEMPTS = Number(process.env.OPENAI_MAX_REWRITE_ATTEMPTS || 4);
 const NEWS_MAX_AGE_DAYS = 10;
 const NEWS_MAX_AGE_MS = NEWS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+const NEWS_FEED_TIMEOUT_MS = Number(process.env.NEWS_FEED_TIMEOUT_MS || 20_000);
+const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
+const FALLBACK_FEED_SOURCE_PRIORITY = 3;
+const APP_VERSION = "news-generator-2026-06-07-repeat-guard-v2";
 const NEWS_STYLE_PROMPT = [
   "You are an editor who writes useful English news briefings for normal readers.",
   "Apply these writing rules every time you generate the news briefing.",
@@ -44,12 +48,14 @@ const NEWS_STYLE_PROMPT = [
   "- Each summary should be one natural paragraph.",
   "",
   "Summary rules:",
-  "- Each news summary must be exactly 5 or 6 short sentences.",
-  "- The summary must be long enough to help the reader understand the news.",
-  "- Do not write only 2-3 general sentences.",
+  "- Each news summary should be detailed enough to explain the news clearly, usually about 90-130 simple English words when the article data supports it.",
+  "- Do not optimize for sentence count. Focus on useful information.",
+  "- The summary must be long enough to help the reader understand the news without opening the link.",
+  "- Do not write a short 2-3 sentence summary.",
+  "- Include 4-6 concrete information points when supported by the article data.",
+  "- Each information point should explain something new, not repeat the same idea.",
   "- For each news item, explain what happened, who or what is involved, why it matters, what is new or important, and what the reader should understand from it.",
-  "- The 5-6 sentences should explain: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next if the article supports it.",
-  "- Internally cover what happened, key details, why it matters, what is new or useful, and what to watch next if the article supports it.",
+  "- The summary should explain as many of these points as the article data supports: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next.",
   "- Be specific. Avoid vague summaries such as 'This study may help future research' or 'This policy may affect the market.'",
   "- Explain reasons in simple and concrete language.",
   "- Explain the news directly. Do not write filler such as 'the article was published by,' 'the report says,' 'according to the source,' or 'the source reported.'",
@@ -72,7 +78,8 @@ const NEWS_STYLE_PROMPT = [
   "Final self-check before returning:",
   "- Is the whole output in English?",
   "- Is there any Chinese text left?",
-  "- Does each summary have exactly 5 or 6 sentences?",
+  "- Is each summary detailed enough, usually about 90-130 simple English words when the article data supports it?",
+  "- Does each summary avoid being only 2-3 general sentences?",
   "- Are the sentences simple and clear?",
   "- Is each summary specific enough?",
   "- Does each summary explain what the news is about?",
@@ -89,6 +96,47 @@ const categoryDisplayNames = {
   china_major_news: "Major China Political News",
   world_politics: "World Politics",
   world_economy: "Global Company News"
+};
+
+const fallbackRssFeedsByCategory = {
+  neuroscience: [
+    { name: "Nature Neuroscience", url: "https://www.nature.com/neuro.rss", priority: 5 },
+    { name: "Neuron", url: "https://www.cell.com/neuron/current.rss", priority: 5 },
+    { name: "Science", url: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science", priority: 4 },
+    { name: "PNAS", url: "https://www.pnas.org/rss/current.xml", priority: 4 },
+    { name: "MIT News Neuroscience", url: "https://news.mit.edu/rss/topic/neuroscience", priority: 3 }
+  ],
+  biology: [
+    { name: "Nature", url: "https://www.nature.com/nature.rss", priority: 5 },
+    { name: "Cell", url: "https://www.cell.com/cell/current.rss", priority: 5 },
+    { name: "Science", url: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science", priority: 4 },
+    { name: "PNAS", url: "https://www.pnas.org/rss/current.xml", priority: 4 },
+    { name: "EurekAlert Biology", url: "https://www.eurekalert.org/rss/biology.xml", priority: 3 }
+  ],
+  us_major_news: [
+    { name: "NPR Politics", url: "https://feeds.npr.org/1014/rss.xml", priority: 5 },
+    { name: "PBS NewsHour Politics", url: "https://www.pbs.org/newshour/feeds/rss/politics", priority: 4 },
+    { name: "BBC US & Canada", url: "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", priority: 4 },
+    { name: "Reuters Politics", url: "https://www.reutersagency.com/feed/?best-topics=political-general&post_type=best", priority: 3 }
+  ],
+  china_major_news: [
+    { name: "BBC Asia", url: "https://feeds.bbci.co.uk/news/world/asia/rss.xml", priority: 5 },
+    { name: "NPR World", url: "https://feeds.npr.org/1004/rss.xml", priority: 4 },
+    { name: "The Diplomat", url: "https://thediplomat.com/feed/", priority: 4 },
+    { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml", priority: 3 }
+  ],
+  world_politics: [
+    { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/rss.xml", priority: 5 },
+    { name: "NPR World", url: "https://feeds.npr.org/1004/rss.xml", priority: 4 },
+    { name: "UN News", url: "https://news.un.org/feed/subscribe/en/news/all/rss.xml", priority: 4 },
+    { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml", priority: 3 }
+  ],
+  world_economy: [
+    { name: "BBC Business", url: "https://feeds.bbci.co.uk/news/business/rss.xml", priority: 5 },
+    { name: "NPR Business", url: "https://feeds.npr.org/1006/rss.xml", priority: 4 },
+    { name: "CNBC Business", url: "https://www.cnbc.com/id/10001147/device/rss/rss.html", priority: 4 },
+    { name: "Yahoo Finance", url: "https://finance.yahoo.com/news/rssindex", priority: 3 }
+  ]
 };
 
 function loadLocalEnv(filePath) {
@@ -313,20 +361,80 @@ function decodeXml(value = "") {
     .replace(/&#39;/g, "'");
 }
 
-function getTag(item, tag) {
+function getTagRaw(item, tag) {
   const match = item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return match ? stripTags(decodeXml(match[1])) : "";
+  return match ? match[1] : "";
 }
 
-function parseRss(xml) {
-  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+function getTag(item, tag) {
+  const raw = getTagRaw(item, tag);
+  return raw ? stripTags(decodeXml(raw)) : "";
+}
+
+function getFirstTag(item, tags) {
+  for (const tag of tags) {
+    const value = getTag(item, tag);
+    if (value) return value;
+  }
+  return "";
+}
+
+function getTagAttribute(item, tag, attribute) {
+  const match = item.match(new RegExp(`<${tag}\\b([^>]*)>`, "i"));
+  if (!match) return "";
+  const attrMatch = match[1].match(new RegExp(`\\b${attribute}=["']([^"']+)["']`, "i"));
+  return attrMatch ? decodeXml(attrMatch[1]).trim() : "";
+}
+
+function getAtomLink(entry) {
+  const links = [...entry.matchAll(/<link\b([^>]*)\/?>/gi)];
+  for (const [, attrs] of links) {
+    const rel = attrs.match(/\brel=["']([^"']+)["']/i)?.[1] || "alternate";
+    const href = attrs.match(/\bhref=["']([^"']+)["']/i)?.[1];
+    if (href && rel === "alternate") return decodeXml(href).trim();
+  }
+  return getTag(entry, "link");
+}
+
+function withArticleSourceMetadata(article, feed, sourceType) {
+  return {
+    ...article,
+    source: article.source || feed.name,
+    feedName: feed.name,
+    feedUrl: feed.url,
+    sourceType,
+    sourcePriority: feed.priority ?? FALLBACK_FEED_SOURCE_PRIORITY
+  };
+}
+
+function parseRss(xml, feed = { name: "RSS Feed", url: "" }, sourceType = "rss") {
+  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)];
   return items.map(([, raw]) => ({
     title: getTag(raw, "title"),
     link: getTag(raw, "link"),
-    source: getTag(raw, "source") || "Google News",
-    publishedAt: getTag(raw, "pubDate"),
-    snippet: getTag(raw, "description")
+    originalUrl: getTag(raw, "guid") || getTagAttribute(raw, "source", "url"),
+    source: getTag(raw, "source") || feed.name,
+    publishedAt: getFirstTag(raw, ["pubDate", "dc:date", "published", "updated"]),
+    snippet: getFirstTag(raw, ["description", "summary", "content:encoded", "content"])
+  })).filter((item) => item.title && item.link).map((article) => withArticleSourceMetadata(article, feed, sourceType));
+}
+
+function parseAtom(xml, feed = { name: "Atom Feed", url: "" }, sourceType = "atom") {
+  const entries = [...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)];
+  return entries.map(([, raw]) => ({
+    title: getTag(raw, "title"),
+    link: getAtomLink(raw),
+    originalUrl: getFirstTag(raw, ["id"]),
+    source: feed.name,
+    publishedAt: getFirstTag(raw, ["published", "updated"]),
+    snippet: getFirstTag(raw, ["summary", "content"])
   })).filter((item) => item.title && item.link);
+}
+
+function parseFeed(xml, feed = { name: "News Feed", url: "" }, sourceType = "rss") {
+  const rssArticles = parseRss(xml, feed, sourceType);
+  if (rssArticles.length) return rssArticles;
+  return parseAtom(xml, feed, sourceType).map((article) => withArticleSourceMetadata(article, feed, sourceType));
 }
 
 function getArticlePublishedTime(article) {
@@ -347,13 +455,51 @@ async function searchGoogleNews(query, limit) {
     gl: "US",
     ceid: "US:en"
   });
-  const response = await fetch(`https://news.google.com/rss/search?${params.toString()}`, {
-    headers: { "user-agent": "PersonalNewsGenerator/0.1" }
-  });
-  if (!response.ok) {
-    throw new Error(`Google News returned ${response.status}`);
+  const { controller, timer } = withTimeout(NEWS_FEED_TIMEOUT_MS);
+  try {
+    const response = await fetch(`https://news.google.com/rss/search?${params.toString()}`, {
+      signal: controller.signal,
+      headers: { "user-agent": "PersonalNewsGenerator/0.1" }
+    });
+    if (!response.ok) {
+      throw new Error(`Google News returned ${response.status}`);
+    }
+    return parseFeed(
+      await response.text(),
+      { name: "Google News", url: "https://news.google.com/rss/search", priority: GOOGLE_NEWS_SOURCE_PRIORITY },
+      "google_news"
+    ).filter((article) => isFreshArticle(article)).slice(0, limit);
+  } finally {
+    clearTimeout(timer);
   }
-  return parseRss(await response.text()).filter((article) => isFreshArticle(article)).slice(0, limit);
+}
+
+async function fetchFeedArticles(feed, limit) {
+  const { controller, timer } = withTimeout(NEWS_FEED_TIMEOUT_MS);
+  try {
+    const response = await fetch(feed.url, {
+      signal: controller.signal,
+      headers: { "user-agent": "PersonalNewsGenerator/0.1" }
+    });
+    if (!response.ok) {
+      throw new Error(`${feed.name} returned ${response.status}`);
+    }
+    return parseFeed(await response.text(), feed, "fallback_rss")
+      .filter((article) => isFreshArticle(article))
+      .slice(0, limit);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getFallbackFeedsForCategory(category) {
+  return fallbackRssFeedsByCategory[category.id] || [];
+}
+
+async function searchFallbackFeeds(category, limit) {
+  const feeds = getFallbackFeedsForCategory(category);
+  const results = await Promise.allSettled(feeds.map((feed) => fetchFeedArticles(feed, limit)));
+  return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
 
 function articleHaystack(article) {
@@ -399,13 +545,26 @@ function scoreArticle(article, category) {
   return score;
 }
 
+function getSourcePriorityScore(article) {
+  const priority = Number(article.sourcePriority || 0);
+  return Number.isFinite(priority) ? priority : 0;
+}
+
 function rankArticlesForCategory(articles, category, limit) {
   const ranked = dedupeArticles(articles)
-    .map((article, index) => ({ article, index, score: scoreArticle(article, category) }))
+    .map((article, index) => {
+      const relevanceScore = scoreArticle(article, category);
+      return {
+        article,
+        index,
+        relevanceScore,
+        score: relevanceScore + getSourcePriorityScore(article)
+      };
+    })
     .sort((a, b) => b.score - a.score || a.index - b.index);
 
   if (category.researchFocused || category.companyFocused) {
-    const focused = ranked.filter((item) => item.score > 0).map((item) => item.article);
+    const focused = ranked.filter((item) => item.relevanceScore > 0).map((item) => item.article);
     if (focused.length >= limit) return focused.slice(0, limit);
   }
 
@@ -440,11 +599,113 @@ function buildSearchQuery(category) {
 function dedupeArticles(articles) {
   const seen = new Set();
   return articles.filter((article) => {
-    const key = article.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-    if (seen.has(key)) return false;
-    seen.add(key);
+    const linkKeys = getArticleLinkKeys(article);
+    const titleKey = getArticleTitleKey(article);
+    if (
+      linkKeys.some((linkKey) => seen.has(`link:${linkKey}`)) ||
+      (titleKey && seen.has(`title:${titleKey}`))
+    ) {
+      return false;
+    }
+    for (const linkKey of linkKeys) seen.add(`link:${linkKey}`);
+    if (titleKey) seen.add(`title:${titleKey}`);
     return true;
   });
+}
+
+function createArticleMemory() {
+  return { links: new Set(), titles: new Set() };
+}
+
+function getArticleLinkKey(article = {}) {
+  const raw = String(article.link || "").trim();
+  return normalizeUrlForKey(raw);
+}
+
+function normalizeUrlForKey(raw = "") {
+  raw = String(raw || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key) || key === "fbclid" || key === "gclid") {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString().toLowerCase();
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+function getArticleLinkKeys(article = {}) {
+  const keys = [
+    article.link,
+    article.originalUrl,
+    article.guid,
+    article.url
+  ].map((value) => normalizeUrlForKey(value)).filter(Boolean);
+  return [...new Set(keys)];
+}
+
+function normalizeArticleTitleForKey(value = "") {
+  return String(value)
+    .replace(/\s+-\s+[^-]{2,80}$/u, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .toLowerCase()
+    .trim();
+}
+
+function getArticleTitleKey(article = {}) {
+  return normalizeArticleTitleForKey(article.originalTitle || article.title || "");
+}
+
+function addArticleToMemory(memory, article = {}) {
+  const linkKeys = getArticleLinkKeys(article);
+  const titleKey = getArticleTitleKey(article);
+  for (const linkKey of linkKeys) memory.links.add(linkKey);
+  if (titleKey) memory.titles.add(titleKey);
+  if (article.originalTitle && article.title && article.originalTitle !== article.title) {
+    const displayTitleKey = normalizeArticleTitleForKey(article.title);
+    if (displayTitleKey) memory.titles.add(displayTitleKey);
+  }
+}
+
+function isArticleInMemory(memory, article = {}) {
+  const linkKeys = getArticleLinkKeys(article);
+  const titleKey = getArticleTitleKey(article);
+  return Boolean(
+    linkKeys.some((linkKey) => memory.links.has(linkKey)) ||
+    (titleKey && memory.titles.has(titleKey))
+  );
+}
+
+function buildRecentArticleMemory(history = [], now = Date.now()) {
+  const memory = createArticleMemory();
+  for (const digest of Array.isArray(history) ? history : []) {
+    const generatedTime = Date.parse(digest?.generatedAt || "");
+    if (!Number.isFinite(generatedTime) || now - generatedTime > NEWS_MAX_AGE_MS) continue;
+    for (const category of digest.categories || []) {
+      for (const article of category.articles || []) {
+        addArticleToMemory(memory, article);
+      }
+    }
+  }
+  return memory;
+}
+
+function filterFreshUnusedArticles(articles, recentMemory, currentRunMemory) {
+  return articles.filter((article) =>
+    isFreshArticle(article) &&
+    !isArticleInMemory(recentMemory, article) &&
+    !isArticleInMemory(currentRunMemory, article)
+  );
+}
+
+function selectUniqueArticlesForCategory(articles, category, itemCount, recentMemory, currentRunMemory) {
+  const candidates = filterFreshUnusedArticles(dedupeArticles(articles), recentMemory, currentRunMemory);
+  return rankArticlesForCategory(candidates, category, itemCount);
 }
 
 function getCategoryDisplayName(category) {
@@ -495,27 +756,8 @@ function getArticleKey(article) {
   return `${article.categoryId}|${article.link}`;
 }
 
-function splitSummarySentences(value = "") {
-  const protectedText = String(value)
-    .replace(/\bU\.S\./g, "US")
-    .replace(/\bU\.K\./g, "UK")
-    .replace(/\bE\.U\./g, "EU")
-    .replace(/\bD\.C\./g, "DC")
-    .replace(/\be\.g\./gi, "eg")
-    .replace(/\bi\.e\./gi, "ie")
-    .replace(/\bDr\./g, "Dr")
-    .replace(/\bMr\./g, "Mr")
-    .replace(/\bMs\./g, "Ms")
-    .replace(/\bMrs\./g, "Mrs")
-    .replace(/\bProf\./g, "Prof");
-
-  return (protectedText.match(/[^.!?]+[.!?]+(?:["')\]]+)?(?=\s+|$)|[^.!?]+$/g) || [])
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence));
-}
-
-function countSummarySentences(value = "") {
-  return splitSummarySentences(value).length;
+function countSummaryWords(value = "") {
+  return (String(value).match(/[\p{L}\p{N}]+(?:['-][\p{L}\p{N}]+)*/gu) || []).length;
 }
 
 function hasSourceOrTimeFiller(value = "") {
@@ -526,18 +768,18 @@ function getGeneratedArticleIssues(article) {
   const issues = [];
   const title = normalizeEnglishTitle(article?.englishTitle);
   const summary = normalizeEnglishSummary(article?.englishSummary);
-  const sentenceCount = countSummarySentences(summary);
+  const wordCount = countSummaryWords(summary);
 
   if (!title) issues.push("missing English title");
   if (!summary) issues.push("missing English summary");
   if (containsChineseText(title) || containsChineseText(summary)) {
     issues.push("contains Chinese text");
   }
-  if (sentenceCount < 5) {
-    issues.push(`summary has ${sentenceCount} sentences; it must have at least 5 and no more than 6 sentences`);
+  if (wordCount < 70) {
+    issues.push(`summary has ${wordCount} words; it must be more detailed and usually about 90-130 simple English words when the article data supports it`);
   }
-  if (sentenceCount > 6) {
-    issues.push(`summary has ${sentenceCount} sentences; it must have at least 5 and no more than 6 sentences`);
+  if (wordCount > 160) {
+    issues.push(`summary has ${wordCount} words; make it shorter and closer to 90-130 simple English words`);
   }
   if (hasSourceOrTimeFiller(summary)) {
     issues.push("summary talks about the article, report, source, or publication instead of explaining the news directly");
@@ -616,7 +858,7 @@ async function createEnglishBriefings(digest) {
     if (!apiKey) {
       for (const category of digest.categories) {
         category.articles = [];
-        category.error = "OPENAI_API_KEY is not set, so no validated 5-6 sentence summaries were generated.";
+        category.error = "OPENAI_API_KEY is not set, so no validated detailed summaries were generated.";
       }
     }
     return {
@@ -625,7 +867,7 @@ async function createEnglishBriefings(digest) {
         enhanced: false,
         message: apiKey
           ? "No articles were available to rewrite."
-          : "OPENAI_API_KEY is not set. No validated 5-6 sentence summaries were generated."
+          : "OPENAI_API_KEY is not set. No validated detailed summaries were generated."
       }
     };
   }
@@ -655,9 +897,13 @@ async function createEnglishBriefings(digest) {
                     "Create a simple English news briefing from the articles below.",
                     "Use the fixed NEWS_STYLE_PROMPT rules from the system instructions.",
                     "englishTitle must be a short English title. Do not include the word 'Title'.",
-                    "englishSummary must be one natural English paragraph with at least 5 and no more than 6 sentences. This is a hard rule.",
-                    "Each sentence must add useful information. Do not add filler sentences just to reach 5 sentences.",
-                    "The 5-6 sentences should explain: 1. what happened; 2. who or what is involved; 3. what method, decision, event, or system is involved; 4. what the key finding, result, or change is; 5. why it matters; 6. what it may affect, help with, or lead to next, if supported by the article.",
+                    "englishSummary must be one natural English paragraph with enough detail to understand the news without opening the link.",
+                    "Write about 90-130 simple English words when the article data supports it.",
+                    "Do not focus on sentence count. Focus on useful information.",
+                    "Include 4-6 concrete information points when supported by the article data.",
+                    "Each information point should explain something new, not repeat the same idea.",
+                    "The summary should explain as many of these points as the article data supports: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next.",
+                    "Do not add a point if the article data does not support it.",
                     "Do not use labels or bullet points.",
                     "Use only the title, source, date, and snippet below as evidence.",
                     "Do not add facts, examples, future steps, reactions, or background context unless they are directly supported by that evidence.",
@@ -746,8 +992,8 @@ async function createEnglishBriefings(digest) {
         });
       }
       category.articles = validatedArticles;
-      if (!category.articles.length) {
-        category.error = "No validated 5-6 sentence summary was generated for this category.";
+      if (!category.articles.length && !category.error) {
+        category.error = "No validated detailed summary was generated for this category.";
       }
     }
 
@@ -756,14 +1002,14 @@ async function createEnglishBriefings(digest) {
       briefingResult: {
         enhanced: true,
         message: hiddenCount
-          ? `English briefing generated with ${OPENAI_MODEL}. ${hiddenCount} item(s) failed the 5-6 sentence validation and were hidden.`
+          ? `English briefing generated with ${OPENAI_MODEL}. ${hiddenCount} item(s) failed the detail validation and were hidden.`
           : `English briefing generated with ${OPENAI_MODEL}.`
       }
     };
   } catch (error) {
     for (const category of digest.categories) {
       category.articles = [];
-      category.error = "No validated 5-6 sentence summaries were generated.";
+      category.error = "No validated detailed summaries were generated.";
     }
     return {
       digest,
@@ -777,8 +1023,10 @@ async function createEnglishBriefings(digest) {
   }
 }
 
-async function generateDigest(config) {
+async function generateDigest(config, history = []) {
   const enabledCategories = config.categories.filter((category) => category.enabled);
+  const recentMemory = buildRecentArticleMemory(history);
+  const currentRunMemory = createArticleMemory();
   const digest = {
     generatedAt: new Date().toISOString(),
     briefingResult: { enhanced: false, message: "English rewrite has not run yet." },
@@ -788,11 +1036,39 @@ async function generateDigest(config) {
   for (const category of enabledCategories) {
     const itemCount = clampItemCount(category.itemCount || config.maxItemsPerCategory || 1);
     const query = buildSearchQuery(category);
-    const searchLimit = category.researchFocused || category.companyFocused
-      ? Math.min(Math.max(itemCount * 8, 8), 30)
-      : itemCount;
+    const searchLimit = Math.min(Math.max(itemCount * 20, 20), 50);
     try {
-      const articles = rankArticlesForCategory(await searchGoogleNews(query, searchLimit), category, itemCount);
+      const candidateArticles = [];
+
+      try {
+        candidateArticles.push(...await searchGoogleNews(query, searchLimit));
+      } catch (error) {
+        console.error(`Google News search failed for ${category.id}:`, error.message || error);
+      }
+
+      let articles = selectUniqueArticlesForCategory(
+        candidateArticles,
+        category,
+        itemCount,
+        recentMemory,
+        currentRunMemory
+      );
+
+      if (articles.length < itemCount) {
+        candidateArticles.push(...await searchFallbackFeeds(category, searchLimit));
+        articles = selectUniqueArticlesForCategory(
+          candidateArticles,
+          category,
+          itemCount,
+          recentMemory,
+          currentRunMemory
+        );
+      }
+
+      for (const article of articles) {
+        addArticleToMemory(currentRunMemory, article);
+      }
+
       digest.categories.push({
         id: category.id,
         name: getCategoryDisplayName(category),
@@ -805,7 +1081,10 @@ async function generateDigest(config) {
           ...article,
           originalTitle: article.title,
           summary: summarizeArticle(article)
-        }))
+        })),
+        error: articles.length
+          ? undefined
+          : "No new non-repeated articles were found for this category today."
       });
     } catch (error) {
       digest.categories.push({
@@ -817,7 +1096,7 @@ async function generateDigest(config) {
         companyFocused: Boolean(category.companyFocused),
         politicalFocused: Boolean(category.politicalFocused),
         articles: [],
-        error: error.message || "Search failed."
+        error: error.message || "No new non-repeated articles were found for this category today."
       });
     }
   }
@@ -981,7 +1260,8 @@ async function sendGmail({ from, to, subject, html, text }) {
 
 async function runDigest({ sendEmail = true } = {}) {
   const config = await readConfig();
-  const digest = await generateDigest(config);
+  const history = await readJson(HISTORY_PATH, []);
+  const digest = await generateDigest(config, history);
   const html = renderEmailHtml(digest);
   const text = renderTextDigest(digest);
   let emailResult = { sent: false, previewOnly: true, message: "Preview generated. No email was sent." };
@@ -1002,7 +1282,6 @@ async function runDigest({ sendEmail = true } = {}) {
     };
   }
 
-  const history = await readJson(HISTORY_PATH, []);
   history.unshift({ ...digest, emailResult });
   await writeJson(HISTORY_PATH, history.slice(0, 20));
   return { digest, html, text, emailResult };
@@ -1050,6 +1329,7 @@ async function handleApi(req, res) {
 }
 
 await ensureDataFiles();
+const serverFileUpdatedAt = existsSync(__filename) ? statSync(__filename).mtime.toISOString() : "unknown";
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -1066,6 +1346,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`News Generator is running at http://${HOST}:${PORT}`);
+  console.log(`News Generator version ${APP_VERSION}; server.js updated at ${serverFileUpdatedAt}; process started at ${new Date().toISOString()}`);
 });
 
 setInterval(schedulerTick, 30_000);
