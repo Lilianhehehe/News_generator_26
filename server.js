@@ -13,6 +13,7 @@ const DATA_DIR = path.join(__dirname, "data");
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 const HISTORY_PATH = path.join(DATA_DIR, "history.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
+const IS_DIRECT_RUN = process.argv[1] && path.resolve(process.argv[1]) === __filename;
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
@@ -25,6 +26,9 @@ const NEWS_FEED_TIMEOUT_MS = Number(process.env.NEWS_FEED_TIMEOUT_MS || 20_000);
 const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
 const FALLBACK_FEED_SOURCE_PRIORITY = 3;
 const APP_VERSION = "news-generator-2026-06-07-repeat-guard-v2";
+const REDIS_CONFIG_KEY = process.env.NEWS_CONFIG_KEY || "news-generator:config";
+const REDIS_HISTORY_KEY = process.env.NEWS_HISTORY_KEY || "news-generator:history";
+const CRON_SECRET = process.env.CRON_SECRET || "";
 const NEWS_STYLE_PROMPT = [
   "You are an editor who writes useful English news briefings for normal readers.",
   "Apply these writing rules every time you generate the news briefing.",
@@ -248,6 +252,7 @@ const defaultConfig = {
 let lastSchedulerMinute = "";
 
 async function ensureDataFiles() {
+  if (hasRedisStorage()) return;
   await mkdir(DATA_DIR, { recursive: true });
   if (!existsSync(CONFIG_PATH)) {
     await writeJson(CONFIG_PATH, defaultConfig);
@@ -257,7 +262,61 @@ async function ensureDataFiles() {
   }
 }
 
+function hasRedisStorage() {
+  return Boolean(getRedisRestUrl() && getRedisRestToken());
+}
+
+function getRedisRestUrl() {
+  return process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
+}
+
+function getRedisRestToken() {
+  return process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
+}
+
+function getRedisKeyForPath(filePath) {
+  if (filePath === CONFIG_PATH) return REDIS_CONFIG_KEY;
+  if (filePath === HISTORY_PATH) return REDIS_HISTORY_KEY;
+  return "";
+}
+
+async function redisCommand(command, ...args) {
+  const baseUrl = getRedisRestUrl().replace(/\/+$/, "");
+  const token = getRedisRestToken();
+  if (!baseUrl || !token) {
+    throw new Error("Upstash Redis storage is not configured.");
+  }
+
+  const response = await fetch(baseUrl, {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${token}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify([command, ...args])
+  });
+
+  if (!response.ok) {
+    throw new Error(`Redis command failed with ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.error) throw new Error(data.error);
+  return data.result;
+}
+
 async function readJson(filePath, fallback) {
+  const redisKey = getRedisKeyForPath(filePath);
+  if (redisKey && hasRedisStorage()) {
+    const value = await redisCommand("GET", redisKey);
+    if (!value) return fallback;
+    try {
+      return typeof value === "string" ? JSON.parse(value) : value;
+    } catch {
+      return fallback;
+    }
+  }
+
   try {
     return JSON.parse(await readFile(filePath, "utf8"));
   } catch {
@@ -299,6 +358,12 @@ function clampItemCount(value) {
 }
 
 async function writeJson(filePath, data) {
+  const redisKey = getRedisKeyForPath(filePath);
+  if (redisKey && hasRedisStorage()) {
+    await redisCommand("SET", redisKey, JSON.stringify(data));
+    return;
+  }
+
   await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
@@ -312,6 +377,8 @@ function sendJson(res, status, data) {
 }
 
 async function readRequestBody(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+  if (typeof req.body === "string") return req.body ? JSON.parse(req.body) : {};
   let body = "";
   for await (const chunk of req) body += chunk;
   return body ? JSON.parse(body) : {};
@@ -1297,6 +1364,57 @@ function currentTimeInZone(timezone) {
   return `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`;
 }
 
+function currentDateKeyInZone(timezone, date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function generatedOnDateInZone(digest, timezone, dateKey) {
+  if (!digest?.generatedAt) return false;
+  const generatedAt = new Date(digest.generatedAt);
+  if (Number.isNaN(generatedAt.getTime())) return false;
+  return currentDateKeyInZone(timezone, generatedAt) === dateKey;
+}
+
+async function runScheduledDigest({ requireSendHour = true } = {}) {
+  const config = await readConfig();
+  const timezone = config.timezone || "America/New_York";
+  const sendHour = String(config.sendTime || "08:00").slice(0, 2);
+  const currentHour = currentTimeInZone(timezone).slice(0, 2);
+
+  if (requireSendHour && currentHour !== sendHour) {
+    return {
+      ran: false,
+      message: `Skipped. Current ${timezone} hour is ${currentHour}, but send hour is ${sendHour}.`
+    };
+  }
+
+  const history = await readJson(HISTORY_PATH, []);
+  const todayKey = currentDateKeyInZone(timezone);
+  const alreadySentToday = history.some((digest) =>
+    generatedOnDateInZone(digest, timezone, todayKey) && digest.emailResult?.sent
+  );
+
+  if (alreadySentToday) {
+    return {
+      ran: false,
+      message: `Skipped. A scheduled email was already sent for ${todayKey}.`
+    };
+  }
+
+  const result = await runDigest({ sendEmail: true });
+  return {
+    ran: true,
+    message: result.emailResult?.message || "Scheduled digest finished.",
+    emailResult: result.emailResult,
+    digest: result.digest
+  };
+}
+
 async function schedulerTick() {
   const config = await readConfig();
   const minuteKey = new Date().toISOString().slice(0, 16);
@@ -1325,28 +1443,41 @@ async function handleApi(req, res) {
     const result = await runDigest({ sendEmail: body.sendEmail !== false });
     return sendJson(res, 200, result);
   }
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/cron") {
+    const authorization = req.headers.authorization || "";
+    const requestSecret = req.headers["x-cron-secret"] || authorization.replace(/^Bearer\s+/i, "");
+    if (CRON_SECRET && requestSecret !== CRON_SECRET) {
+      return sendJson(res, 401, { error: "Unauthorized" });
+    }
+    const result = await runScheduledDigest({ requireSendHour: false });
+    return sendJson(res, 200, result);
+  }
   sendJson(res, 404, { error: "Not found" });
 }
 
-await ensureDataFiles();
-const serverFileUpdatedAt = existsSync(__filename) ? statSync(__filename).mtime.toISOString() : "unknown";
+export { handleApi, runDigest, runScheduledDigest };
 
-const server = http.createServer(async (req, res) => {
-  try {
-    if (req.url.startsWith("/api/")) {
-      await handleApi(req, res);
-    } else {
-      serveStatic(req, res);
+if (IS_DIRECT_RUN) {
+  await ensureDataFiles();
+  const serverFileUpdatedAt = existsSync(__filename) ? statSync(__filename).mtime.toISOString() : "unknown";
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      if (req.url.startsWith("/api/")) {
+        await handleApi(req, res);
+      } else {
+        serveStatic(req, res);
+      }
+    } catch (error) {
+      console.error(error);
+      sendJson(res, 500, { error: error.message || "Server error" });
     }
-  } catch (error) {
-    console.error(error);
-    sendJson(res, 500, { error: error.message || "Server error" });
-  }
-});
+  });
 
-server.listen(PORT, HOST, () => {
-  console.log(`News Generator is running at http://${HOST}:${PORT}`);
-  console.log(`News Generator version ${APP_VERSION}; server.js updated at ${serverFileUpdatedAt}; process started at ${new Date().toISOString()}`);
-});
+  server.listen(PORT, HOST, () => {
+    console.log(`News Generator is running at http://${HOST}:${PORT}`);
+    console.log(`News Generator version ${APP_VERSION}; server.js updated at ${serverFileUpdatedAt}; process started at ${new Date().toISOString()}`);
+  });
 
-setInterval(schedulerTick, 30_000);
+  setInterval(schedulerTick, 30_000);
+}

@@ -8,6 +8,11 @@
 - If Google News has too few non-repeated results, the app should expand to category-matched official RSS sources from other websites.
 - If no unique article is found after expanded search, the app should not repeat old news as filler.
 - The server should log its app version, loaded `server.js` modified time, and process start time at startup so stale background processes are easy to detect.
+- The project supports Vercel deployment with serverless API routes in `api/` and cron configuration in `vercel.json`.
+- Local runs use `data/config.json` and `data/history.json`. Vercel runs should use Upstash Redis through `KV_REST_API_URL` and `KV_REST_API_TOKEN`; the app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+- Vercel Hobby Cron calls `/api/cron` once per day at 12:00 UTC. The Vercel Cron route sends when called and skips if an email was already sent on the same local date. The local background scheduler still checks the configured timezone and send time.
+- The shared app logic remains in `server.js`. API route files should import and reuse `handleApi` instead of duplicating news generation code.
+- `vercel.json` must keep explicit builds and routes so Vercel serves `public/` as static files and `api/*.js` as serverless functions, instead of using the local `server.js` file as the production root entrypoint.
 
 ## News Writing Rules
 

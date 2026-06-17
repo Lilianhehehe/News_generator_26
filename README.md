@@ -1,8 +1,8 @@
-# 每日新闻简报 MVP
+# Daily News Brief MVP
 
-一个本地运行的小工具：在网页里选择新闻方向、关键词、接收邮箱和发送时间，然后用 Google News 搜索结果生成中文简报，并通过 Gmail 发给自己。
+A small tool that creates a simple English daily news brief and emails it through Gmail. It can run locally as a small web server, or online on Vercel with Vercel Cron.
 
-## 启动
+## Local start
 
 ```bash
 npm start
@@ -14,54 +14,111 @@ npm start
 http://localhost:3000
 ```
 
-## 后台自动运行
+## Deploy to Vercel
 
-本项目可以安装成 macOS 后台服务。安装后不需要一直开着 terminal，只要电脑开机、已登录并联网，服务会在后台运行，并按网页里的发送时间自动发邮件。
+The Vercel version uses:
 
-后台服务配置文件：
+- Static files from `public/`
+- Serverless API routes in `api/`
+- Shared app logic from `server.js`
+- Vercel Cron at `/api/cron`
+- Upstash Redis for saved settings and news history
+
+`vercel.json` explicitly routes `/` and static assets to `public/`, and routes `/api/*` to the serverless files in `api/`. This prevents Vercel from treating the local `server.js` file as the production root server.
+
+Vercel Cron is configured in `vercel.json`:
+
+```json
+{
+  "path": "/api/cron",
+  "schedule": "0 12 * * *"
+}
+```
+
+Vercel Cron runs on UTC time. Hobby accounts are limited to daily cron jobs, so the production Cron runs once per day at 12:00 UTC. That is about 8 a.m. in New York during daylight saving time and about 7 a.m. in New York during standard time. The Vercel Cron route sends when it is called, and the app checks the stored history so it does not send twice on the same local day.
+
+### Vercel environment variables
+
+Set these in the Vercel project:
+
+```text
+OPENAI_API_KEY=...
+GMAIL_APP_PASSWORD=...
+KV_REST_API_URL=...
+KV_REST_API_TOKEN=...
+```
+
+Optional:
+
+```text
+OPENAI_MODEL=gpt-5-mini
+GMAIL_USER=your-sender@gmail.com
+CRON_SECRET=some-long-secret
+NEWS_CONFIG_KEY=news-generator:config
+NEWS_HISTORY_KEY=news-generator:history
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+```
+
+If `CRON_SECRET` is set, requests to `/api/cron` must include the same value in the `x-cron-secret` header or as a bearer token. Leave it unset if you want Vercel Cron to call the route directly without extra headers.
+
+Vercel's Upstash Redis Marketplace integration usually injects `KV_REST_API_URL` and `KV_REST_API_TOKEN`. The app also accepts the older Upstash-style names `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+
+## Local background service
+
+This project can also run as a macOS background service. After installation, the local service runs while the computer is awake, logged in, and online.
+
+Service file:
 
 ```text
 launchd/com.lisa.news-generator.plist
 ```
 
-后台日志：
+Logs:
 
 ```text
 data/launchd.out.log
 data/launchd.err.log
 ```
 
-注意：如果电脑关机或睡眠，到点时不能保证发送。
+If the computer is off or asleep, the local service may not send at the configured time.
 
-## Gmail 发信设置
+## Gmail email setup
 
-本工具不会把 Gmail 密码写进代码。要真正发送邮件，请先设置环境变量：
+The app does not store a Gmail password in code. To send email locally, set:
 
 ```bash
-export GMAIL_APP_PASSWORD="你的 Gmail 应用专用密码"
+export GMAIL_APP_PASSWORD="your Gmail app password"
 npm start
 ```
 
-发送邮箱在网页里配置，第一版默认是 `lilianhe347208@gmail.com`。如果没有设置 `GMAIL_APP_PASSWORD`，点击“立即生成”会生成网页预览，但不会发送邮件。
+The sender email is configured in the web page. If `GMAIL_APP_PASSWORD` is not set, Generate Now creates a preview but does not send email.
 
-## OpenAI 英文简报设置
+## OpenAI setup
 
-要让每条新闻生成英文概括标题，以及信息更完整的英文介绍，请设置 `OPENAI_API_KEY`：
+Set `OPENAI_API_KEY` to generate validated English titles and detailed simple-English summaries:
 
 ```bash
-export OPENAI_API_KEY="你的 OpenAI API Key"
-export GMAIL_APP_PASSWORD="你的 Gmail 应用专用密码"
+export OPENAI_API_KEY="your OpenAI API Key"
+export GMAIL_APP_PASSWORD="your Gmail app password"
 npm start
 ```
 
-默认使用 `gpt-5-mini`。如果没有设置 `OPENAI_API_KEY`，工具仍然会搜索新闻，但只显示基础预览，不会生成高质量英文改写。
+The default model is `gpt-5-mini`. If `OPENAI_API_KEY` is not set, the app searches news but does not show short fallback summaries as final output.
 
-## 数据保存位置
+## Data storage
 
-- 配置：`data/config.json`
-- 最近生成记录：`data/history.json`
+Local mode:
 
-## 当前第一版范围
+- Settings: `data/config.json`
+- Recent history: `data/history.json`
+
+Vercel mode:
+
+- Settings: Upstash Redis key `news-generator:config`
+- Recent history: Upstash Redis key `news-generator:history`
+
+## Current scope
 
 - Google News RSS 搜索，并过滤掉超过 10 天、缺少日期或日期无效的结果
 - OpenAI 生成英文概括标题和约 90-130 个简单英文词的详细介绍
