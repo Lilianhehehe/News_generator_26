@@ -1,3 +1,9 @@
+const loginView = document.querySelector("#loginView");
+const appView = document.querySelector("#appView");
+const authError = document.querySelector("#authError");
+const currentUser = document.querySelector("#currentUser");
+const signOut = document.querySelector("#signOut");
+const disconnectGoogle = document.querySelector("#disconnectGoogle");
 const form = document.querySelector("#settingsForm");
 const senderEmail = document.querySelector("#senderEmail");
 const recipientEmail = document.querySelector("#recipientEmail");
@@ -10,6 +16,8 @@ const preview = document.querySelector("#preview");
 const template = document.querySelector("#categoryTemplate");
 
 let state = null;
+let userEmail = "";
+const keywordTimers = new WeakMap();
 
 function setStatus(text) {
   statusPill.textContent = text;
@@ -25,28 +33,105 @@ async function api(path, options = {}) {
   return data;
 }
 
+function showLogin(message = "") {
+  appView.hidden = true;
+  loginView.hidden = false;
+  if (message) {
+    authError.hidden = false;
+    authError.textContent = message;
+  } else {
+    authError.hidden = true;
+    authError.textContent = "";
+  }
+}
+
+function showApp(session) {
+  loginView.hidden = true;
+  appView.hidden = false;
+  userEmail = session.email;
+  currentUser.textContent = userEmail;
+}
+
 function renderCategories() {
   categories.innerHTML = "";
   state.categories.forEach((category) => {
     const node = template.content.firstElementChild.cloneNode(true);
+    const nameInput = node.querySelector(".category-name");
+    const keywordsInput = node.querySelector(".category-keywords");
+    const generateKeywordsButton = node.querySelector(".generate-keywords");
     node.dataset.id = category.id;
     node.querySelector(".category-enabled").checked = category.enabled;
-    node.querySelector(".category-name").value = category.name;
+    nameInput.value = category.name;
     node.querySelector(".category-count").value = category.itemCount || 1;
-    node.querySelector(".category-keywords").value = (category.keywords || []).join("，");
+    keywordsInput.value = (category.keywords || []).join(", ");
     node.querySelector(".remove-category").addEventListener("click", () => {
       state.categories = state.categories.filter((item) => item.id !== category.id);
       renderCategories();
+    });
+    generateKeywordsButton.addEventListener("click", () => {
+      generateKeywordsForCategory(node, { force: true });
+    });
+    nameInput.addEventListener("input", () => {
+      scheduleKeywordGeneration(node);
+    });
+    nameInput.addEventListener("blur", () => {
+      if (node.dataset.needsKeywords === "true") {
+        generateKeywordsForCategory(node);
+      }
     });
     categories.appendChild(node);
   });
 }
 
+function scheduleKeywordGeneration(node) {
+  if (node.dataset.needsKeywords !== "true") return;
+  const keywordsInput = node.querySelector(".category-keywords");
+  if (keywordsInput.value.trim()) return;
+
+  clearTimeout(keywordTimers.get(node));
+  keywordTimers.set(node, setTimeout(() => {
+    generateKeywordsForCategory(node);
+  }, 700));
+}
+
+async function generateKeywordsForCategory(node, { force = false } = {}) {
+  const nameInput = node.querySelector(".category-name");
+  const keywordsInput = node.querySelector(".category-keywords");
+  const button = node.querySelector(".generate-keywords");
+  const categoryName = nameInput.value.trim();
+
+  if (!categoryName || categoryName === "New Category") return;
+  if (!force && keywordsInput.value.trim()) return;
+
+  clearTimeout(keywordTimers.get(node));
+  button.disabled = true;
+  button.textContent = "Generating";
+  setStatus("Generating keywords");
+
+  try {
+    const result = await api("/api/keywords", {
+      method: "POST",
+      body: JSON.stringify({ categoryName })
+    });
+    if (Array.isArray(result.keywords) && result.keywords.length) {
+      keywordsInput.value = result.keywords.join(", ");
+      node.dataset.needsKeywords = "false";
+      setStatus("Keywords ready");
+    }
+  } catch (error) {
+    setStatus("Keyword failed");
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Generate Keywords";
+  }
+}
+
 function readFormState() {
   return {
     ...state,
-    senderEmail: senderEmail.value.trim(),
-    recipientEmail: recipientEmail.value.trim(),
+    senderEmail: userEmail,
+    recipientEmail: userEmail,
     sendTime: sendTime.value || "08:00",
     categories: [...categories.querySelectorAll(".category-card")].map((node) => ({
       id: node.dataset.id,
@@ -114,6 +199,28 @@ async function saveConfig() {
   });
 }
 
+function resetAppView() {
+  userEmail = "";
+  state = null;
+  categories.innerHTML = "";
+  preview.className = "preview-empty";
+  preview.textContent = "Save your settings, then click \"Generate Now\" to test once.";
+  setStatus("Ready");
+}
+
+signOut.addEventListener("click", async () => {
+  await api("/api/auth/logout", { method: "POST" });
+  resetAppView();
+  showLogin();
+});
+
+disconnectGoogle.addEventListener("click", async () => {
+  if (!confirm("Disconnect Google for this account? Scheduled sending will stop until you sign in again.")) return;
+  await api("/api/auth/disconnect", { method: "POST" });
+  resetAppView();
+  showLogin("Google was disconnected. Sign in again to resume sending.");
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   setStatus("Saving");
@@ -135,6 +242,11 @@ addCategory.addEventListener("click", () => {
     keywords: []
   });
   renderCategories();
+  const newNode = categories.lastElementChild;
+  if (newNode) {
+    newNode.dataset.needsKeywords = "true";
+    newNode.querySelector(".category-name").select();
+  }
 });
 
 runNow.addEventListener("click", async () => {
@@ -157,14 +269,37 @@ runNow.addEventListener("click", async () => {
 });
 
 async function init() {
+  const session = await api("/api/auth/session");
+  const url = new URL(window.location.href);
+  const authMessage = url.searchParams.get("authError") || "";
+
+  if (!session.authConfigured) {
+    showLogin(`Google OAuth is not configured. Missing: ${(session.missing || []).join(", ")}`);
+    return;
+  }
+
+  if (!session.authenticated) {
+    showLogin(authMessage);
+    return;
+  }
+
+  showApp(session);
+  setStatus("Loading");
   state = await api("/api/config");
-  senderEmail.value = state.senderEmail || "";
-  recipientEmail.value = state.recipientEmail || "";
+  senderEmail.value = userEmail;
+  recipientEmail.value = userEmail;
   sendTime.value = state.sendTime || "08:00";
   renderCategories();
+  if (session.needsReconnect) {
+    setStatus("Reconnect needed");
+    preview.className = "preview-empty";
+    preview.textContent = session.reconnectReason || "Please sign in with Google again to allow Gmail sending.";
+  } else {
+    setStatus("Ready");
+  }
 }
 
 init().catch((error) => {
-  setStatus("Startup failed");
-  preview.textContent = error.message;
+  resetAppView();
+  showLogin(error.message);
 });

@@ -14,6 +14,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -32,7 +36,8 @@ textarea {
   font: inherit;
 }
 
-button {
+button,
+a.primary-button {
   cursor: pointer;
 }
 
@@ -49,6 +54,61 @@ button {
   align-items: end;
   padding: 28px 0 34px;
   border-bottom: 2px solid var(--ink);
+}
+
+.login-view {
+  display: grid;
+  max-width: 760px;
+  gap: 28px;
+  margin: 8vh auto 0;
+  padding: 34px;
+}
+
+.login-form {
+  display: grid;
+  max-width: 420px;
+  gap: 12px;
+}
+
+.login-form .field {
+  margin-bottom: 0;
+}
+
+.auth-button {
+  width: max-content;
+}
+
+.auth-error {
+  border: 1px solid rgba(189, 79, 43, 0.4);
+  border-radius: 4px;
+  padding: 12px;
+  color: var(--accent);
+  background: rgba(189, 79, 43, 0.08);
+  line-height: 1.45;
+}
+
+.masthead-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.user-pill {
+  display: inline-flex;
+  min-height: 34px;
+  max-width: min(320px, 100%);
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: #fbf7ed;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kicker {
@@ -98,11 +158,15 @@ h2 {
 }
 
 .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 156px;
   padding: 0 22px;
   color: #fffdf6;
   background: var(--ink);
   box-shadow: 7px 7px 0 var(--gold);
+  text-decoration: none;
 }
 
 .primary-button:hover,
@@ -184,6 +248,11 @@ textarea {
   outline: none;
 }
 
+input[readonly] {
+  color: var(--muted);
+  background: #f3eee3;
+}
+
 textarea {
   resize: vertical;
 }
@@ -231,6 +300,28 @@ textarea:focus {
 
 .compact {
   margin-bottom: 0;
+}
+
+.keyword-label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.keyword-button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 10px;
+  color: var(--green);
+  background: #fffdf6;
+  font-size: 12px;
+}
+
+.keyword-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .switch {
@@ -354,6 +445,14 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .masthead-actions {
+    justify-content: stretch;
+  }
+
+  .masthead-actions > * {
+    flex: 1 1 auto;
+  }
+
   .primary-button {
     width: 100%;
   }
@@ -371,6 +470,11 @@ textarea:focus {
   }
 
   .field-row {
+    flex-direction: column;
+  }
+
+  .keyword-label {
+    align-items: stretch;
     flex-direction: column;
   }
 }

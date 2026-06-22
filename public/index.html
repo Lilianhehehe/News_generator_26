@@ -8,58 +8,77 @@
   </head>
   <body>
     <main class="shell">
-      <section class="masthead">
+      <section id="loginView" class="login-view panel">
         <div>
           <p class="kicker">Morning Desk</p>
           <h1>Daily News Brief</h1>
-          <p class="lede">Choose topics, keywords, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
+          <p class="lede">Sign in with Google so this app can send your Daily News Brief from your Gmail account to the same address.</p>
         </div>
-        <button id="runNow" class="primary-button" type="button">
-          <span>Generate Now</span>
-        </button>
+        <div id="authError" class="auth-error" hidden></div>
+        <div class="login-form">
+          <a class="primary-button auth-button" href="/api/auth/google/start">Sign in with Google</a>
+        </div>
       </section>
 
-      <section class="workspace">
-        <form id="settingsForm" class="panel settings-panel">
-          <div class="panel-heading">
-            <h2>Send Settings</h2>
-            <button class="save-button" type="submit">Save</button>
+      <div id="appView" hidden>
+        <section class="masthead">
+          <div>
+            <p class="kicker">Morning Desk</p>
+            <h1>Daily News Brief</h1>
+            <p class="lede">Choose topics, keywords, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
           </div>
+          <div class="masthead-actions">
+            <span id="currentUser" class="user-pill"></span>
+            <button id="disconnectGoogle" class="ghost-button" type="button">Disconnect Google</button>
+            <button id="signOut" class="ghost-button" type="button">Sign Out</button>
+            <button id="runNow" class="primary-button" type="button">
+              <span>Generate Now</span>
+            </button>
+          </div>
+        </section>
 
-          <label class="field">
-            <span>Sender Email</span>
-            <input id="senderEmail" type="email" placeholder="lilianhe347208@gmail.com" />
-          </label>
+        <section class="workspace">
+          <form id="settingsForm" class="panel settings-panel">
+            <div class="panel-heading">
+              <h2>Send Settings</h2>
+              <button class="save-button" type="submit">Save</button>
+            </div>
 
-          <label class="field">
-            <span>Recipient Email</span>
-            <input id="recipientEmail" type="email" placeholder="zh2652@barnard.edu" />
-          </label>
-
-          <div class="field-row">
             <label class="field">
-              <span>Daily Send Time</span>
-              <input id="sendTime" type="time" />
+              <span>Sender Gmail</span>
+              <input id="senderEmail" type="email" readonly placeholder="you@gmail.com" />
             </label>
-          </div>
 
-          <div class="category-header">
-            <h2>News Topics</h2>
-            <button id="addCategory" class="ghost-button" type="button">Add Topic</button>
-          </div>
-          <div id="categories" class="category-list"></div>
-        </form>
+            <label class="field">
+              <span>Recipient Gmail</span>
+              <input id="recipientEmail" type="email" readonly placeholder="you@gmail.com" />
+            </label>
 
-        <aside class="panel preview-panel">
-          <div class="panel-heading">
-            <h2>Generated Result</h2>
-            <span id="status" class="status-pill">Ready</span>
-          </div>
-          <div id="preview" class="preview-empty">
-            Save your settings, then click "Generate Now" to test once. If Gmail sending is not available, this area will show a preview.
-          </div>
-        </aside>
-      </section>
+            <div class="field-row">
+              <label class="field">
+                <span>Daily Send Time</span>
+                <input id="sendTime" type="time" />
+              </label>
+            </div>
+
+            <div class="category-header">
+              <h2>News Topics</h2>
+              <button id="addCategory" class="ghost-button" type="button">Add Topic</button>
+            </div>
+            <div id="categories" class="category-list"></div>
+          </form>
+
+          <aside class="panel preview-panel">
+            <div class="panel-heading">
+              <h2>Generated Result</h2>
+              <span id="status" class="status-pill">Ready</span>
+            </div>
+            <div id="preview" class="preview-empty">
+              Save your settings, then click "Generate Now" to test once. If Gmail sending is not available, this area will show a preview.
+            </div>
+          </aside>
+        </section>
+      </div>
     </main>
 
     <template id="categoryTemplate">
@@ -77,7 +96,10 @@
           <button class="icon-button remove-category" type="button" aria-label="Remove">×</button>
         </div>
         <label class="field compact">
-          <span>Keywords, separated by commas</span>
+          <span class="keyword-label">
+            <span>Keywords, separated by commas</span>
+            <button class="keyword-button generate-keywords" type="button">Generate Keywords</button>
+          </span>
           <textarea class="category-keywords" rows="2"></textarea>
         </label>
       </article>

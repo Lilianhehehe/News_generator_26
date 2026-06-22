@@ -1,9 +1,16 @@
 import http from "node:http";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync, createReadStream, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import tls from "node:tls";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual
+} from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,6 +19,8 @@ loadLocalEnv(path.join(__dirname, ".env.local"));
 const DATA_DIR = path.join(__dirname, "data");
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 const HISTORY_PATH = path.join(DATA_DIR, "history.json");
+const USERS_DIR = path.join(DATA_DIR, "users");
+const USERS_INDEX_PATH = path.join(DATA_DIR, "users.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const IS_DIRECT_RUN = process.argv[1] && path.resolve(process.argv[1]) === __filename;
 const PORT = Number(process.env.PORT || 3000);
@@ -28,7 +37,27 @@ const FALLBACK_FEED_SOURCE_PRIORITY = 3;
 const APP_VERSION = "news-generator-2026-06-07-repeat-guard-v2";
 const REDIS_CONFIG_KEY = process.env.NEWS_CONFIG_KEY || "news-generator:config";
 const REDIS_HISTORY_KEY = process.env.NEWS_HISTORY_KEY || "news-generator:history";
+const REDIS_USERS_KEY = process.env.NEWS_USERS_KEY || "news-generator:users";
+const REDIS_USER_KEY_PREFIX = process.env.NEWS_USER_KEY_PREFIX || "news-generator:user";
 const CRON_SECRET = process.env.CRON_SECRET || "";
+const AUTH_SECRET = process.env.AUTH_SECRET || "";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || "";
+const SESSION_COOKIE_NAME = "news_session";
+const OAUTH_STATE_COOKIE_NAME = "news_oauth_state";
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60;
+const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
+const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
+const GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+const GOOGLE_SCOPES = [
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/gmail.send"
+];
 const NEWS_STYLE_PROMPT = [
   "You are an editor who writes useful English news briefings for normal readers.",
   "Apply these writing rules every time you generate the news briefing.",
@@ -254,11 +283,15 @@ let lastSchedulerMinute = "";
 async function ensureDataFiles() {
   if (hasRedisStorage()) return;
   await mkdir(DATA_DIR, { recursive: true });
+  await mkdir(USERS_DIR, { recursive: true });
   if (!existsSync(CONFIG_PATH)) {
     await writeJson(CONFIG_PATH, defaultConfig);
   }
   if (!existsSync(HISTORY_PATH)) {
     await writeJson(HISTORY_PATH, []);
+  }
+  if (!existsSync(USERS_INDEX_PATH)) {
+    await writeJson(USERS_INDEX_PATH, []);
   }
 }
 
@@ -277,6 +310,7 @@ function getRedisRestToken() {
 function getRedisKeyForPath(filePath) {
   if (filePath === CONFIG_PATH) return REDIS_CONFIG_KEY;
   if (filePath === HISTORY_PATH) return REDIS_HISTORY_KEY;
+  if (filePath === USERS_INDEX_PATH) return REDIS_USERS_KEY;
   return "";
 }
 
@@ -305,8 +339,8 @@ async function redisCommand(command, ...args) {
   return data.result;
 }
 
-async function readJson(filePath, fallback) {
-  const redisKey = getRedisKeyForPath(filePath);
+async function readJson(filePath, fallback, options = {}) {
+  const redisKey = options.redisKey || getRedisKeyForPath(filePath);
   if (redisKey && hasRedisStorage()) {
     const value = await redisCommand("GET", redisKey);
     if (!value) return fallback;
@@ -326,6 +360,10 @@ async function readJson(filePath, fallback) {
 
 async function readConfig() {
   const saved = await readJson(CONFIG_PATH, defaultConfig);
+  return normalizeConfig(saved);
+}
+
+function normalizeConfig(saved) {
   const savedCategories = Array.isArray(saved.categories) ? saved.categories : defaultConfig.categories;
   const categories = savedCategories.map((category) => normalizeCategory(category, saved.maxItemsPerCategory));
   return {
@@ -357,14 +395,533 @@ function clampItemCount(value) {
   return Math.min(Math.max(count, 1), 10);
 }
 
-async function writeJson(filePath, data) {
-  const redisKey = getRedisKeyForPath(filePath);
+async function writeJson(filePath, data, options = {}) {
+  const redisKey = options.redisKey || getRedisKeyForPath(filePath);
   if (redisKey && hasRedisStorage()) {
     await redisCommand("SET", redisKey, JSON.stringify(data));
     return;
   }
 
+  await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function normalizeUserEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidUserEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
+}
+
+function getUserStorageId(email) {
+  return encodeURIComponent(email);
+}
+
+function getUserConfigPath(email) {
+  return path.join(USERS_DIR, getUserStorageId(email), "config.json");
+}
+
+function getUserHistoryPath(email) {
+  return path.join(USERS_DIR, getUserStorageId(email), "history.json");
+}
+
+function getUserAuthPath(email) {
+  return path.join(USERS_DIR, getUserStorageId(email), "auth.json");
+}
+
+function getUserRedisKey(email, type) {
+  return `${REDIS_USER_KEY_PREFIX}:${getUserStorageId(email)}:${type}`;
+}
+
+async function readRegisteredUsers() {
+  const users = await readJson(USERS_INDEX_PATH, []);
+  if (!Array.isArray(users)) return [];
+  return [...new Set(users.map(normalizeUserEmail).filter(isValidUserEmail))].sort();
+}
+
+async function writeRegisteredUsers(users) {
+  const normalized = [...new Set(users.map(normalizeUserEmail).filter(isValidUserEmail))].sort();
+  await writeJson(USERS_INDEX_PATH, normalized);
+  return normalized;
+}
+
+async function registerUser(email) {
+  const users = await readRegisteredUsers();
+  if (!users.includes(email)) {
+    await writeRegisteredUsers([...users, email]);
+  }
+}
+
+async function unregisterUser(email) {
+  const users = await readRegisteredUsers();
+  if (users.includes(email)) {
+    await writeRegisteredUsers(users.filter((user) => user !== email));
+  }
+}
+
+async function readUserConfig(email) {
+  const saved = await readJson(getUserConfigPath(email), null, {
+    redisKey: getUserRedisKey(email, "config")
+  });
+
+  if (saved) {
+    return normalizeConfig({
+      ...saved,
+      senderEmail: email,
+      recipientEmail: email
+    });
+  }
+
+  const baseConfig = await readConfig();
+  return normalizeConfig({
+    ...baseConfig,
+    senderEmail: email,
+    recipientEmail: email
+  });
+}
+
+async function writeUserConfig(email, config) {
+  const normalized = normalizeConfig({
+    ...defaultConfig,
+    ...config,
+    senderEmail: email,
+    recipientEmail: email
+  });
+  await registerUser(email);
+  await writeJson(getUserConfigPath(email), normalized, {
+    redisKey: getUserRedisKey(email, "config")
+  });
+  return normalized;
+}
+
+async function readUserHistory(email) {
+  const history = await readJson(getUserHistoryPath(email), [], {
+    redisKey: getUserRedisKey(email, "history")
+  });
+  return Array.isArray(history) ? history : [];
+}
+
+async function writeUserHistory(email, history) {
+  await registerUser(email);
+  await writeJson(getUserHistoryPath(email), history, {
+    redisKey: getUserRedisKey(email, "history")
+  });
+}
+
+async function readUserAuth(email) {
+  const auth = await readJson(getUserAuthPath(email), null, {
+    redisKey: getUserRedisKey(email, "auth")
+  });
+  return auth && typeof auth === "object" ? auth : null;
+}
+
+async function writeUserAuth(email, auth) {
+  await registerUser(email);
+  await writeJson(getUserAuthPath(email), auth, {
+    redisKey: getUserRedisKey(email, "auth")
+  });
+}
+
+async function deleteUserAuth(email) {
+  const redisKey = getUserRedisKey(email, "auth");
+  if (hasRedisStorage()) {
+    await redisCommand("DEL", redisKey);
+    return;
+  }
+  await rm(getUserAuthPath(email), { force: true });
+}
+
+function getAuthSetupStatus() {
+  const missing = [];
+  if (!GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
+  if (!GOOGLE_CLIENT_SECRET) missing.push("GOOGLE_CLIENT_SECRET");
+  if (!GOOGLE_REDIRECT_URI) missing.push("GOOGLE_REDIRECT_URI");
+  if (!AUTH_SECRET) missing.push("AUTH_SECRET");
+  return { configured: missing.length === 0, missing };
+}
+
+function requireAuthSetup() {
+  const status = getAuthSetupStatus();
+  if (!status.configured) {
+    throw new Error(`Google OAuth is not configured. Missing: ${status.missing.join(", ")}`);
+  }
+}
+
+function base64UrlEncode(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
+  return buffer.toString("base64url");
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(String(value), "base64url").toString("utf8");
+}
+
+function getEncryptionKey() {
+  if (!AUTH_SECRET) throw new Error("AUTH_SECRET is required.");
+  return createHash("sha256").update(AUTH_SECRET).digest();
+}
+
+function encryptSecret(value) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", getEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return ["v1", base64UrlEncode(iv), base64UrlEncode(tag), base64UrlEncode(encrypted)].join(".");
+}
+
+function decryptSecret(value) {
+  const [version, ivText, tagText, encryptedText] = String(value || "").split(".");
+  if (version !== "v1" || !ivText || !tagText || !encryptedText) {
+    throw new Error("Stored Google authorization is invalid.");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", getEncryptionKey(), Buffer.from(ivText, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagText, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedText, "base64url")),
+    decipher.final()
+  ]).toString("utf8");
+}
+
+function signTokenPayload(payload) {
+  if (!AUTH_SECRET) throw new Error("AUTH_SECRET is required.");
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const signature = createHmac("sha256", AUTH_SECRET).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+function verifySignedToken(token) {
+  if (!AUTH_SECRET || !token) return null;
+  const [body, signature] = String(token).split(".");
+  if (!body || !signature) return null;
+  const expected = createHmac("sha256", AUTH_SECRET).update(body).digest("base64url");
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  if (expectedBuffer.length !== signatureBuffer.length || !timingSafeEqual(expectedBuffer, signatureBuffer)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(base64UrlDecode(body));
+    if (payload.exp && Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map((part) => {
+    const separator = part.indexOf("=");
+    if (separator === -1) return ["", ""];
+    const key = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    try {
+      return [decodeURIComponent(key), decodeURIComponent(value)];
+    } catch {
+      return [key, value];
+    }
+  }).filter(([key]) => key));
+}
+
+function isSecureRequest(req) {
+  return req.headers["x-forwarded-proto"] === "https" || req.socket?.encrypted;
+}
+
+function buildCookie(name, value, req, options = {}) {
+  const parts = [
+    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+  if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
+  if (isSecureRequest(req)) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function clearCookie(name, req) {
+  return buildCookie(name, "", req, { maxAge: 0 });
+}
+
+function readSession(req) {
+  const payload = verifySignedToken(parseCookies(req)[SESSION_COOKIE_NAME]);
+  const email = normalizeUserEmail(payload?.email);
+  if (!email || !isValidUserEmail(email) || !payload.sub) return null;
+  return { email, sub: String(payload.sub) };
+}
+
+function requireSession(req, res) {
+  const session = readSession(req);
+  if (!session) {
+    sendJson(res, 401, { error: "Please sign in with Google first." });
+    return null;
+  }
+  return session;
+}
+
+function setSessionCookie(res, req, session) {
+  const token = signTokenPayload({
+    email: session.email,
+    sub: session.sub,
+    iat: Date.now(),
+    exp: Date.now() + SESSION_MAX_AGE_SECONDS * 1000
+  });
+  res.setHeader("Set-Cookie", buildCookie(SESSION_COOKIE_NAME, token, req, {
+    maxAge: SESSION_MAX_AGE_SECONDS
+  }));
+}
+
+function redirect(res, location, headers = {}) {
+  res.writeHead(302, { location, ...headers });
+  res.end();
+}
+
+function redirectToHomeWithError(res, message, headers = {}) {
+  redirect(res, `/?authError=${encodeURIComponent(message)}`, headers);
+}
+
+async function postForm(url, fields) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(fields)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || `Google request failed with ${response.status}`);
+  }
+  return data;
+}
+
+async function exchangeGoogleCode(code) {
+  const data = await postForm(GOOGLE_TOKEN_URL, {
+    code,
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    grant_type: "authorization_code"
+  });
+  if (!data.access_token) throw new Error("Google did not return an access token.");
+  return data;
+}
+
+async function refreshGoogleAccessToken(refreshToken) {
+  const data = await postForm(GOOGLE_TOKEN_URL, {
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    refresh_token: refreshToken,
+    grant_type: "refresh_token"
+  });
+  if (!data.access_token) throw new Error("Google did not return an access token.");
+  return data;
+}
+
+async function fetchGoogleUserInfo(accessToken) {
+  const response = await fetch(GOOGLE_USERINFO_URL, {
+    headers: { authorization: `Bearer ${accessToken}` }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || `Google userinfo failed with ${response.status}`);
+  }
+  return data;
+}
+
+function getGrantedScopes(tokenData = {}) {
+  return String(tokenData.scope || "").split(/\s+/).filter(Boolean);
+}
+
+function hasGmailSendScope(scopes = []) {
+  return scopes.includes("https://www.googleapis.com/auth/gmail.send");
+}
+
+async function storeGoogleAuth(email, userInfo, tokenData) {
+  const existing = await readUserAuth(email);
+  const refreshToken = tokenData.refresh_token || (existing?.encryptedRefreshToken ? decryptSecret(existing.encryptedRefreshToken) : "");
+  if (!refreshToken) {
+    throw new Error("Google did not return offline access. Please sign in again and approve Gmail sending.");
+  }
+  const scopes = getGrantedScopes(tokenData);
+  const now = new Date().toISOString();
+  await writeUserAuth(email, {
+    provider: "google",
+    googleSub: String(userInfo.sub || ""),
+    email,
+    emailVerified: Boolean(userInfo.email_verified),
+    scopes,
+    encryptedRefreshToken: encryptSecret(refreshToken),
+    accessTokenExpiresAt: tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : "",
+    needsReconnect: !hasGmailSendScope(scopes),
+    reconnectReason: hasGmailSendScope(scopes) ? "" : "Gmail send permission was not granted.",
+    updatedAt: now,
+    createdAt: existing?.createdAt || now
+  });
+}
+
+async function getUserAccessToken(email) {
+  try {
+    requireAuthSetup();
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+  const auth = await readUserAuth(email);
+  if (!auth?.encryptedRefreshToken || auth.needsReconnect) {
+    return {
+      ok: false,
+      message: auth?.reconnectReason || "Please reconnect Google so this app can send email from your Gmail account."
+    };
+  }
+  if (!hasGmailSendScope(auth.scopes || [])) {
+    await writeUserAuth(email, {
+      ...auth,
+      needsReconnect: true,
+      reconnectReason: "Gmail send permission was not granted.",
+      updatedAt: new Date().toISOString()
+    });
+    return { ok: false, message: "Please reconnect Google and approve Gmail sending." };
+  }
+
+  try {
+    const tokenData = await refreshGoogleAccessToken(decryptSecret(auth.encryptedRefreshToken));
+    await writeUserAuth(email, {
+      ...auth,
+      scopes: getGrantedScopes(tokenData).length ? getGrantedScopes(tokenData) : auth.scopes,
+      accessTokenExpiresAt: tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : auth.accessTokenExpiresAt,
+      needsReconnect: false,
+      reconnectReason: "",
+      updatedAt: new Date().toISOString()
+    });
+    return { ok: true, accessToken: tokenData.access_token };
+  } catch (error) {
+    await writeUserAuth(email, {
+      ...auth,
+      needsReconnect: true,
+      reconnectReason: error.message || "Google authorization failed. Please reconnect.",
+      updatedAt: new Date().toISOString()
+    });
+    return { ok: false, message: "Google authorization failed. Please reconnect." };
+  }
+}
+
+async function handleGoogleAuthStart(req, res) {
+  try {
+    requireAuthSetup();
+  } catch (error) {
+    return redirectToHomeWithError(res, error.message);
+  }
+
+  const state = randomBytes(24).toString("base64url");
+  const stateCookie = signTokenPayload({
+    state,
+    exp: Date.now() + OAUTH_STATE_MAX_AGE_SECONDS * 1000
+  });
+  const authUrl = new URL(GOOGLE_AUTH_URL);
+  authUrl.searchParams.set("client_id", GOOGLE_CLIENT_ID);
+  authUrl.searchParams.set("redirect_uri", GOOGLE_REDIRECT_URI);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
+  authUrl.searchParams.set("access_type", "offline");
+  authUrl.searchParams.set("prompt", "consent");
+  authUrl.searchParams.set("state", state);
+  redirect(res, authUrl.toString(), {
+    "Set-Cookie": buildCookie(OAUTH_STATE_COOKIE_NAME, stateCookie, req, {
+      maxAge: OAUTH_STATE_MAX_AGE_SECONDS
+    })
+  });
+}
+
+async function handleGoogleAuthCallback(req, res, url) {
+  const clearState = clearCookie(OAUTH_STATE_COOKIE_NAME, req);
+  try {
+    requireAuthSetup();
+    const error = url.searchParams.get("error");
+    if (error) throw new Error(url.searchParams.get("error_description") || error);
+
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const statePayload = verifySignedToken(parseCookies(req)[OAUTH_STATE_COOKIE_NAME]);
+    if (!code || !state || !statePayload?.state || state !== statePayload.state) {
+      throw new Error("Google sign-in expired or failed. Please try again.");
+    }
+
+    const tokenData = await exchangeGoogleCode(code);
+    const userInfo = await fetchGoogleUserInfo(tokenData.access_token);
+    const email = normalizeUserEmail(userInfo.email);
+    if (!email || !isValidUserEmail(email) || !userInfo.email_verified) {
+      throw new Error("Google did not verify this email address.");
+    }
+    if (!hasGmailSendScope(getGrantedScopes(tokenData))) {
+      throw new Error("Gmail send permission was not granted.");
+    }
+
+    await storeGoogleAuth(email, userInfo, tokenData);
+    await writeUserConfig(email, await readUserConfig(email));
+    const sessionCookie = buildCookie(SESSION_COOKIE_NAME, signTokenPayload({
+      email,
+      sub: String(userInfo.sub || ""),
+      iat: Date.now(),
+      exp: Date.now() + SESSION_MAX_AGE_SECONDS * 1000
+    }), req, { maxAge: SESSION_MAX_AGE_SECONDS });
+    redirect(res, "/", { "Set-Cookie": [sessionCookie, clearState] });
+  } catch (error) {
+    redirectToHomeWithError(res, error.message || "Google sign-in failed.", {
+      "Set-Cookie": clearState
+    });
+  }
+}
+
+async function getSessionResponse(req) {
+  const status = getAuthSetupStatus();
+  const session = readSession(req);
+  if (!session) {
+    return {
+      authenticated: false,
+      authConfigured: status.configured,
+      missing: status.missing
+    };
+  }
+  const auth = await readUserAuth(session.email);
+  return {
+    authenticated: true,
+    authConfigured: status.configured,
+    email: session.email,
+    needsReconnect: Boolean(auth?.needsReconnect || !auth?.encryptedRefreshToken),
+    reconnectReason: auth?.reconnectReason || ""
+  };
+}
+
+async function handleLogout(req, res) {
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "Set-Cookie": clearCookie(SESSION_COOKIE_NAME, req)
+  });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function handleDisconnect(req, res) {
+  const session = requireSession(req, res);
+  if (!session) return;
+
+  const auth = await readUserAuth(session.email);
+  if (auth?.encryptedRefreshToken) {
+    try {
+      await fetch(GOOGLE_REVOKE_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: decryptSecret(auth.encryptedRefreshToken) })
+      });
+    } catch (error) {
+      console.error("Google token revoke failed:", error.message || error);
+    }
+  }
+  await deleteUserAuth(session.email);
+  await unregisterUser(session.email);
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "Set-Cookie": clearCookie(SESSION_COOKIE_NAME, req)
+  });
+  res.end(JSON.stringify({ ok: true }));
 }
 
 function sendJson(res, status, data) {
@@ -904,6 +1461,184 @@ function formatOpenAIError(status, body) {
   }
 }
 
+function cleanKeyword(value = "") {
+  return String(value)
+    .replace(/[，;|]/g, ",")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+}
+
+function uniqueKeywords(keywords = []) {
+  const seen = new Set();
+  return keywords
+    .map(cleanKeyword)
+    .filter((keyword) => keyword && keyword.length <= 80)
+    .filter((keyword) => {
+      const key = keyword.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function fallbackKeywordsForCategory(categoryName = "") {
+  const name = cleanKeyword(categoryName);
+  const lower = name.toLowerCase();
+  const base = name && name !== "New Category" ? name : "latest news";
+
+  if (/(neuro|brain|psych|cognitive|mental)/i.test(lower)) {
+    return uniqueKeywords([
+      `${base} research`,
+      `${base} study`,
+      `${base} paper`,
+      "Nature Neuroscience",
+      "Neuron",
+      "Science neuroscience",
+      "brain research news"
+    ]);
+  }
+
+  if (/(bio|medicine|medical|health|gene|cell|disease|cancer)/i.test(lower)) {
+    return uniqueKeywords([
+      `${base} research`,
+      `${base} study`,
+      `${base} paper`,
+      "Nature biology",
+      "Science biology",
+      "Cell biology",
+      "medical research news"
+    ]);
+  }
+
+  if (/(business|econom|market|finance|company|stock|earnings)/i.test(lower)) {
+    return uniqueKeywords([
+      `${base} news`,
+      `${base} companies`,
+      `${base} earnings`,
+      "major companies earnings",
+      "merger acquisition",
+      "company layoffs",
+      "market regulation"
+    ]);
+  }
+
+  if (/(politic|policy|law|election|court|government|diplomacy)/i.test(lower)) {
+    return uniqueKeywords([
+      `${base} politics`,
+      `${base} policy`,
+      `${base} government`,
+      `${base} election`,
+      "diplomacy news",
+      "court decision",
+      "lawmakers"
+    ]);
+  }
+
+  if (/(tech|ai|software|chip|robot|cyber|startup)/i.test(lower)) {
+    return uniqueKeywords([
+      `${base} technology`,
+      `${base} AI`,
+      `${base} companies`,
+      `${base} product`,
+      "technology policy",
+      "cybersecurity news",
+      "startup funding"
+    ]);
+  }
+
+  return uniqueKeywords([
+    `${base} news`,
+    `${base} latest`,
+    `${base} breaking news`,
+    `${base} policy`,
+    `${base} research`,
+    `${base} companies`,
+    `${base} global`
+  ]);
+}
+
+async function generateKeywords(categoryName = "") {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const fallback = fallbackKeywordsForCategory(categoryName);
+
+  if (!apiKey) {
+    return { keywords: fallback, generatedBy: "fallback" };
+  }
+
+  const { controller, timer } = withTimeout(OPENAI_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        max_output_tokens: 1200,
+        reasoning: { effort: "minimal" },
+        instructions: [
+          "Generate useful English search keywords for a personal news generator.",
+          "The keywords will be used with Google News RSS.",
+          "Return short comma-style search phrases.",
+          "Use simple English.",
+          "Do not include Chinese text.",
+          "Do not include explanations."
+        ].join("\n"),
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `News category: ${categoryName}\nReturn 6 to 10 focused search keywords.`
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "news_category_keywords",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                keywords: {
+                  type: "array",
+                  minItems: 6,
+                  maxItems: 10,
+                  items: { type: "string" }
+                }
+              },
+              required: ["keywords"]
+            }
+          },
+          verbosity: "low"
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(formatOpenAIError(response.status, body));
+    }
+
+    const responseJson = await response.json();
+    const parsed = JSON.parse(extractResponseText(responseJson));
+    const keywords = uniqueKeywords(parsed.keywords);
+    return { keywords: keywords.length ? keywords : fallback, generatedBy: keywords.length ? OPENAI_MODEL : "fallback" };
+  } catch (error) {
+    return { keywords: fallback, generatedBy: "fallback", warning: error.message || "Keyword generation failed." };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function createEnglishBriefings(digest) {
   const apiKey = process.env.OPENAI_API_KEY;
   const articlesForModel = digest.categories.flatMap((category) =>
@@ -1226,80 +1961,20 @@ function renderTextDigest(digest) {
   }).join("\n\n");
 }
 
-function smtpRead(socket, timeoutMs = 15_000) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("SMTP response timed out"));
-    }, timeoutMs);
-    const cleanup = () => {
-      clearTimeout(timer);
-      socket.off("data", onData);
-      socket.off("error", onError);
-    };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onData = (chunk) => {
-      data += chunk.toString("utf8");
-      if (/(^|\r?\n)\d{3} /.test(data)) {
-        cleanup();
-        resolve(data);
-      }
-    };
-    socket.on("data", onData);
-    socket.once("error", onError);
-  });
+function sanitizeHeaderValue(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").trim();
 }
 
-async function smtpCommand(socket, command) {
-  socket.write(`${command}\r\n`);
-  const response = await smtpRead(socket);
-  if (!/^[23]/.test(response)) {
-    throw new Error(`SMTP failed: ${response.trim()}`);
-  }
-  return response;
+function encodeMimeHeader(value) {
+  return `=?UTF-8?B?${Buffer.from(String(value || ""), "utf8").toString("base64")}?=`;
 }
 
-async function sendGmail({ from, to, subject, html, text }) {
-  const user = from || process.env.GMAIL_USER;
-  const password = process.env.GMAIL_APP_PASSWORD?.replace(/\s+/g, "");
-
-  if (!user || !password) {
-    return {
-      sent: false,
-      previewOnly: true,
-      message: "The sender email or GMAIL_APP_PASSWORD is not set. A preview was generated, but no email was sent."
-    };
-  }
-
-  const socket = tls.connect(465, "smtp.gmail.com", { servername: "smtp.gmail.com" });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("Gmail connection timed out"));
-    }, 15_000);
-    socket.once("secureConnect", resolve);
-    socket.once("error", reject);
-    socket.once("secureConnect", () => clearTimeout(timer));
-    socket.once("error", () => clearTimeout(timer));
-  });
-  await smtpRead(socket);
-  await smtpCommand(socket, "EHLO localhost");
-  await smtpCommand(socket, "AUTH LOGIN");
-  await smtpCommand(socket, Buffer.from(user).toString("base64"));
-  await smtpCommand(socket, Buffer.from(password).toString("base64"));
-  await smtpCommand(socket, `MAIL FROM:<${user}>`);
-  await smtpCommand(socket, `RCPT TO:<${to}>`);
-  await smtpCommand(socket, "DATA");
-
+function renderGmailMimeMessage({ from, to, subject, html, text }) {
   const boundary = `news-${Date.now()}`;
-  const message = [
-    `From: ${user}`,
-    `To: ${to}`,
-    `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
+  return [
+    `From: ${sanitizeHeaderValue(from)}`,
+    `To: ${sanitizeHeaderValue(to)}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "",
@@ -1315,33 +1990,85 @@ async function sendGmail({ from, to, subject, html, text }) {
     "",
     html,
     "",
-    `--${boundary}--`,
-    "."
+    `--${boundary}--`
   ].join("\r\n");
-
-  await smtpCommand(socket, message);
-  await smtpCommand(socket, "QUIT");
-  socket.end();
-  return { sent: true, previewOnly: false, message: "Email sent." };
 }
 
-async function runDigest({ sendEmail = true } = {}) {
-  const config = await readConfig();
-  const history = await readJson(HISTORY_PATH, []);
+async function sendGmailFromUser({ userEmail, subject, html, text, accessToken = "" }) {
+  const tokenResult = accessToken ? { ok: true, accessToken } : await getUserAccessToken(userEmail);
+  if (!tokenResult.ok) {
+    return {
+      sent: false,
+      previewOnly: true,
+      needsReconnect: true,
+      message: tokenResult.message
+    };
+  }
+
+  const mime = renderGmailMimeMessage({
+    from: userEmail,
+    to: userEmail,
+    subject,
+    html,
+    text
+  });
+  const response = await fetch(GMAIL_SEND_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${tokenResult.accessToken}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ raw: Buffer.from(mime, "utf8").toString("base64url") })
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      const auth = await readUserAuth(userEmail);
+      if (auth) {
+        await writeUserAuth(userEmail, {
+          ...auth,
+          needsReconnect: true,
+          reconnectReason: data.error?.message || "Gmail send permission failed. Please reconnect.",
+          updatedAt: new Date().toISOString()
+        });
+      }
+      return {
+        sent: false,
+        previewOnly: true,
+        needsReconnect: true,
+        message: "Gmail send permission failed. Please reconnect Google."
+      };
+    }
+    throw new Error(data.error?.message || `Gmail API failed with ${response.status}`);
+  }
+
+  return {
+    sent: true,
+    previewOnly: false,
+    gmailMessageId: data.id || "",
+    message: `Email sent from ${userEmail} to ${userEmail}.`
+  };
+}
+
+async function runDigest({ sendEmail = true, userEmail = "", accessToken = "" } = {}) {
+  if (!userEmail) throw new Error("A signed-in Gmail user is required.");
+  const config = await readUserConfig(userEmail);
+  const history = await readUserHistory(userEmail);
   const digest = await generateDigest(config, history);
   const html = renderEmailHtml(digest);
   const text = renderTextDigest(digest);
   let emailResult = { sent: false, previewOnly: true, message: "Preview generated. No email was sent." };
 
-  if (sendEmail && config.recipientEmail && digest.briefingResult?.enhanced) {
-    emailResult = await sendGmail({
-      from: config.senderEmail,
-      to: config.recipientEmail,
+  if (sendEmail && digest.briefingResult?.enhanced) {
+    emailResult = await sendGmailFromUser({
+      userEmail,
       subject: "Daily News",
       html,
-      text
+      text,
+      accessToken
     });
-  } else if (sendEmail && config.recipientEmail && !digest.briefingResult?.enhanced) {
+  } else if (sendEmail && !digest.briefingResult?.enhanced) {
     emailResult = {
       sent: false,
       previewOnly: true,
@@ -1350,7 +2077,7 @@ async function runDigest({ sendEmail = true } = {}) {
   }
 
   history.unshift({ ...digest, emailResult });
-  await writeJson(HISTORY_PATH, history.slice(0, 20));
+  await writeUserHistory(userEmail, history.slice(0, 20));
   return { digest, html, text, emailResult };
 }
 
@@ -1380,20 +2107,31 @@ function generatedOnDateInZone(digest, timezone, dateKey) {
   return currentDateKeyInZone(timezone, generatedAt) === dateKey;
 }
 
-async function runScheduledDigest({ requireSendHour = true } = {}) {
-  const config = await readConfig();
+async function runScheduledDigestForUser(userEmail, { requireSendHour = true } = {}) {
+  const config = await readUserConfig(userEmail);
   const timezone = config.timezone || "America/New_York";
-  const sendHour = String(config.sendTime || "08:00").slice(0, 2);
-  const currentHour = currentTimeInZone(timezone).slice(0, 2);
+  const sendTime = String(config.sendTime || "08:00").slice(0, 5);
+  const currentTime = currentTimeInZone(timezone);
 
-  if (requireSendHour && currentHour !== sendHour) {
+  if (requireSendHour && currentTime !== sendTime) {
     return {
+      userEmail,
       ran: false,
-      message: `Skipped. Current ${timezone} hour is ${currentHour}, but send hour is ${sendHour}.`
+      message: `Skipped. Current ${timezone} time is ${currentTime}, but send time is ${sendTime}.`
     };
   }
 
-  const history = await readJson(HISTORY_PATH, []);
+  const tokenResult = await getUserAccessToken(userEmail);
+  if (!tokenResult.ok) {
+    return {
+      userEmail,
+      ran: false,
+      needsReconnect: true,
+      message: tokenResult.message
+    };
+  }
+
+  const history = await readUserHistory(userEmail);
   const todayKey = currentDateKeyInZone(timezone);
   const alreadySentToday = history.some((digest) =>
     generatedOnDateInZone(digest, timezone, todayKey) && digest.emailResult?.sent
@@ -1401,13 +2139,15 @@ async function runScheduledDigest({ requireSendHour = true } = {}) {
 
   if (alreadySentToday) {
     return {
+      userEmail,
       ran: false,
       message: `Skipped. A scheduled email was already sent for ${todayKey}.`
     };
   }
 
-  const result = await runDigest({ sendEmail: true });
+  const result = await runDigest({ sendEmail: true, userEmail, accessToken: tokenResult.accessToken });
   return {
+    userEmail,
     ran: true,
     message: result.emailResult?.message || "Scheduled digest finished.",
     emailResult: result.emailResult,
@@ -1415,32 +2155,93 @@ async function runScheduledDigest({ requireSendHour = true } = {}) {
   };
 }
 
+async function runScheduledDigest({ requireSendHour = true } = {}) {
+  const users = await readRegisteredUsers();
+  if (!users.length) {
+    return {
+      ran: false,
+      message: "No signed-in Gmail users are registered for scheduled sending.",
+      results: []
+    };
+  }
+
+  const results = [];
+  for (const userEmail of users) {
+    try {
+      results.push(await runScheduledDigestForUser(userEmail, { requireSendHour }));
+    } catch (error) {
+      results.push({
+        userEmail,
+        ran: false,
+        message: error.message || "Scheduled digest failed for this user."
+      });
+    }
+  }
+
+  const ran = results.some((result) => result.ran);
+  return {
+    ran,
+    message: ran ? "Scheduled digest finished for one or more users." : "No user digest was sent.",
+    results
+  };
+}
+
 async function schedulerTick() {
-  const config = await readConfig();
   const minuteKey = new Date().toISOString().slice(0, 16);
   if (lastSchedulerMinute === minuteKey) return;
-  if (currentTimeInZone(config.timezone || "America/New_York") === config.sendTime) {
-    lastSchedulerMinute = minuteKey;
-    runDigest({ sendEmail: true }).catch((error) => console.error("Scheduled digest failed:", error));
-  }
+  lastSchedulerMinute = minuteKey;
+  runScheduledDigest({ requireSendHour: true }).catch((error) => console.error("Scheduled digest failed:", error));
 }
 
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  if (req.method === "GET" && url.pathname === "/api/auth/google/start") {
+    return handleGoogleAuthStart(req, res);
+  }
+  if (req.method === "GET" && url.pathname === "/api/auth/google/callback") {
+    return handleGoogleAuthCallback(req, res, url);
+  }
+  if (req.method === "GET" && url.pathname === "/api/auth/session") {
+    return sendJson(res, 200, await getSessionResponse(req));
+  }
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    return handleLogout(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/api/auth/disconnect") {
+    return handleDisconnect(req, res);
+  }
   if (req.method === "GET" && url.pathname === "/api/config") {
-    return sendJson(res, 200, await readConfig());
+    const session = requireSession(req, res);
+    if (!session) return;
+    return sendJson(res, 200, await readUserConfig(session.email));
   }
   if (req.method === "PUT" && url.pathname === "/api/config") {
+    const session = requireSession(req, res);
+    if (!session) return;
     const body = await readRequestBody(req);
-    await writeJson(CONFIG_PATH, { ...defaultConfig, ...body });
+    await writeUserConfig(session.email, body);
     return sendJson(res, 200, { ok: true });
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
-    return sendJson(res, 200, await readJson(HISTORY_PATH, []));
+    const session = requireSession(req, res);
+    if (!session) return;
+    return sendJson(res, 200, await readUserHistory(session.email));
+  }
+  if (req.method === "POST" && url.pathname === "/api/keywords") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const body = await readRequestBody(req);
+    const categoryName = cleanKeyword(body.categoryName || "");
+    if (!categoryName) {
+      return sendJson(res, 400, { error: "Category name is required." });
+    }
+    return sendJson(res, 200, await generateKeywords(categoryName));
   }
   if (req.method === "POST" && url.pathname === "/api/run") {
+    const session = requireSession(req, res);
+    if (!session) return;
     const body = await readRequestBody(req);
-    const result = await runDigest({ sendEmail: body.sendEmail !== false });
+    const result = await runDigest({ sendEmail: body.sendEmail !== false, userEmail: session.email });
     return sendJson(res, 200, result);
   }
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/cron") {
