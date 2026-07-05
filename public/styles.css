@@ -324,6 +324,93 @@ textarea:focus {
   opacity: 0.65;
 }
 
+.keyword-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.keyword-actions .keyword-button:disabled {
+  cursor: default;
+}
+
+.advanced-search {
+  margin-top: 10px;
+}
+
+.advanced-toggle {
+  border: 0;
+  padding: 0;
+  color: var(--green);
+  background: transparent;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.advanced-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+}
+
+.auto-keyword-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.generated-keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.keyword-chip,
+.keyword-empty {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--ink);
+  background: #fffefa;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+button.keyword-chip {
+  cursor: pointer;
+}
+
+button.keyword-chip:hover,
+.keyword-chip.selected {
+  border-color: var(--green);
+  color: #fffdf6;
+  background: var(--green);
+}
+
+.keyword-chip.in-focus,
+button.keyword-chip.in-focus:hover {
+  cursor: default;
+  border-color: rgba(22, 93, 89, 0.3);
+  color: var(--muted);
+  background: #f3eee3;
+}
+
+.keyword-empty {
+  color: var(--muted);
+}
+
+.keyword-chip.stale {
+  color: var(--accent);
+  background: rgba(189, 79, 43, 0.08);
+}
+
 .switch {
   position: relative;
   display: inline-flex;
@@ -476,5 +563,9 @@ textarea:focus {
   .keyword-label {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .keyword-actions {
+    justify-content: stretch;
   }
 }

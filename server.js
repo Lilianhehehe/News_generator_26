@@ -200,6 +200,8 @@ const defaultConfig = {
       enabled: true,
       itemCount: 1,
       researchFocused: true,
+      focus: "New neuroscience research, especially studies from major journals about the brain, neurons, cognition, and mental health.",
+      keywordMode: "auto",
       keywords: [
         "neuroscience paper",
         "neuroscience publication",
@@ -207,7 +209,16 @@ const defaultConfig = {
         "Neuron",
         "Science neuroscience",
         "Cell neuroscience"
-      ]
+      ],
+      generatedKeywords: [
+        "neuroscience paper",
+        "neuroscience publication",
+        "Nature Neuroscience",
+        "Neuron",
+        "Science neuroscience",
+        "Cell neuroscience"
+      ],
+      customKeywords: []
     },
     {
       id: "biology",
@@ -215,6 +226,8 @@ const defaultConfig = {
       enabled: true,
       itemCount: 1,
       researchFocused: true,
+      focus: "New biology research, especially studies from major journals about cells, genes, disease, medicine, and life science.",
+      keywordMode: "auto",
       keywords: [
         "biology paper",
         "biology publication",
@@ -222,7 +235,16 @@ const defaultConfig = {
         "Science biology",
         "Cell biology",
         "PNAS biology"
-      ]
+      ],
+      generatedKeywords: [
+        "biology paper",
+        "biology publication",
+        "Nature biology",
+        "Science biology",
+        "Cell biology",
+        "PNAS biology"
+      ],
+      customKeywords: []
     },
     {
       id: "us_major_news",
@@ -230,13 +252,23 @@ const defaultConfig = {
       enabled: true,
       itemCount: 1,
       politicalFocused: true,
+      focus: "Major United States political news, including the White House, Congress, courts, elections, and policy changes.",
+      keywordMode: "auto",
       keywords: [
         "US politics breaking news",
         "White House Congress",
         "Trump administration",
         "Supreme Court",
         "US election policy"
-      ]
+      ],
+      generatedKeywords: [
+        "US politics breaking news",
+        "White House Congress",
+        "Trump administration",
+        "Supreme Court",
+        "US election policy"
+      ],
+      customKeywords: []
     },
     {
       id: "china_major_news",
@@ -244,20 +276,34 @@ const defaultConfig = {
       enabled: true,
       itemCount: 1,
       politicalFocused: true,
+      focus: "Major China political news, including government policy, diplomacy, Taiwan, security, and official decisions.",
+      keywordMode: "auto",
       keywords: [
         "China politics",
         "Chinese government policy",
         "Beijing official statement",
         "Taiwan China diplomacy",
         "China foreign policy"
-      ]
+      ],
+      generatedKeywords: [
+        "China politics",
+        "Chinese government policy",
+        "Beijing official statement",
+        "Taiwan China diplomacy",
+        "China foreign policy"
+      ],
+      customKeywords: []
     },
     {
       id: "world_politics",
       name: "World Politics",
       enabled: true,
       itemCount: 1,
-      keywords: ["world politics", "geopolitics", "international politics"]
+      focus: "Important world politics, geopolitics, diplomacy, security, and major decisions by governments.",
+      keywordMode: "auto",
+      keywords: ["world politics", "geopolitics", "international politics"],
+      generatedKeywords: ["world politics", "geopolitics", "international politics"],
+      customKeywords: []
     },
     {
       id: "world_economy",
@@ -265,6 +311,8 @@ const defaultConfig = {
       enabled: true,
       itemCount: 3,
       companyFocused: true,
+      focus: "Major company news from around the world, including earnings, markets, mergers, layoffs, regulation, and supply chains.",
+      keywordMode: "auto",
       keywords: [
         "major companies earnings",
         "global companies",
@@ -273,7 +321,17 @@ const defaultConfig = {
         "company layoffs",
         "supply chain company news",
         "market leaders regulation"
-      ]
+      ],
+      generatedKeywords: [
+        "major companies earnings",
+        "global companies",
+        "Big Tech earnings",
+        "merger acquisition",
+        "company layoffs",
+        "supply chain company news",
+        "market leaders regulation"
+      ],
+      customKeywords: []
     }
   ]
 };
@@ -379,13 +437,34 @@ function normalizeCategory(category, fallbackCount = 1) {
     && !("researchFocused" in category)
     && !("companyFocused" in category);
   const isMigratingPoliticalCategory = defaults.politicalFocused && !("politicalFocused" in category);
-  return {
+  const legacyKeywords = (isMigratingFocusedCategory || isMigratingPoliticalCategory)
+    ? defaults.keywords
+    : (category.keywords || defaults.keywords || []);
+  const keywordMode = category.keywordMode === "auto" || category.keywordMode === "custom"
+    ? category.keywordMode
+    : "custom";
+  const generatedKeywords = Array.isArray(category.generatedKeywords)
+    ? category.generatedKeywords
+    : (keywordMode === "auto" ? legacyKeywords : (defaults.generatedKeywords || legacyKeywords));
+  const customKeywords = Array.isArray(category.customKeywords)
+    ? category.customKeywords
+    : (legacyKeywords || []);
+  const focus = typeof category.focus === "string" && category.focus.trim()
+    ? category.focus
+    : (legacyKeywords || []).join(", ");
+  const normalizedCategory = {
     ...defaults,
     ...category,
-    keywords: (isMigratingFocusedCategory || isMigratingPoliticalCategory)
-      ? defaults.keywords
-      : (category.keywords || defaults.keywords || []),
+    focus: focus || defaults.focus || "",
+    keywordMode,
+    generatedKeywords: uniqueKeywords(generatedKeywords),
+    customKeywords: uniqueKeywords(customKeywords),
+    generatedKeywordsStale: Boolean(category.generatedKeywordsStale),
     itemCount: clampItemCount(category.itemCount ?? defaults.itemCount ?? fallbackCount ?? 1)
+  };
+  return {
+    ...normalizedCategory,
+    keywords: getCategorySearchKeywords(normalizedCategory)
   };
 }
 
@@ -1195,17 +1274,26 @@ function rankArticlesForCategory(articles, category, limit) {
   return ranked.map((item) => item.article).slice(0, limit);
 }
 
+function getFocusSearchKeywords(focus = "") {
+  const cleaned = cleanFocus(focus);
+  if (!cleaned) return [];
+  const parts = cleaned
+    .split(/[,，;\n]/)
+    .map((part) => part.replace(/^(?:and|or|including|include|especially|about|with)\s+/i, "").trim())
+    .filter(Boolean);
+  return uniqueKeywords(parts.length > 1 ? parts : [cleaned]);
+}
+
+function getCategorySearchKeywords(category = {}) {
+  const normalized = getFocusSearchKeywords(category.focus || "");
+  return normalized.length ? normalized : uniqueKeywords(category.keywords || []);
+}
+
 function buildSearchQuery(category) {
-  const keywords = (category.keywords || []).filter(Boolean);
+  const keywords = getCategorySearchKeywords(category);
   const joinedKeywords = keywords.length ? keywords.join(" OR ") : getCategoryDisplayName(category);
 
   if (category.researchFocused) {
-    if (category.id === "neuroscience") {
-      return `(site:nature.com neuroscience OR site:cell.com neuron OR site:science.org neuroscience OR site:pnas.org neuroscience) when:${NEWS_MAX_AGE_DAYS}d`;
-    }
-    if (category.id === "biology") {
-      return `(site:nature.com biology OR site:science.org biology OR site:cell.com biology OR site:pnas.org biology) when:${NEWS_MAX_AGE_DAYS}d`;
-    }
     return `(${joinedKeywords}) (paper OR publication OR study OR "research article" OR journal) when:${NEWS_MAX_AGE_DAYS}d`;
   }
 
@@ -1483,9 +1571,17 @@ function uniqueKeywords(keywords = []) {
     .slice(0, 10);
 }
 
-function fallbackKeywordsForCategory(categoryName = "") {
+function cleanFocus(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function fallbackKeywordsForCategory(categoryName = "", focusText = "") {
   const name = cleanKeyword(categoryName);
-  const lower = name.toLowerCase();
+  const focus = cleanFocus(focusText);
+  const lower = `${name} ${focus}`.toLowerCase();
   const base = name && name !== "New Category" ? name : "latest news";
 
   if (/(neuro|brain|psych|cognitive|mental)/i.test(lower)) {
@@ -1559,9 +1655,10 @@ function fallbackKeywordsForCategory(categoryName = "") {
   ]);
 }
 
-async function generateKeywords(categoryName = "") {
+async function generateKeywords(categoryName = "", focusText = "") {
   const apiKey = process.env.OPENAI_API_KEY;
-  const fallback = fallbackKeywordsForCategory(categoryName);
+  const focus = cleanFocus(focusText);
+  const fallback = fallbackKeywordsForCategory(categoryName, focus);
 
   if (!apiKey) {
     return { keywords: fallback, generatedBy: "fallback" };
@@ -1581,8 +1678,11 @@ async function generateKeywords(categoryName = "") {
         max_output_tokens: 1200,
         reasoning: { effort: "minimal" },
         instructions: [
-          "Generate useful English search keywords for a personal news generator.",
-          "The keywords will be used with Google News RSS.",
+          "Generate useful English keyword suggestions for a personal news generator.",
+          "The user may choose these suggestions and add them to a Focus field.",
+          "Use the topic title and focus text as the source.",
+          "Make the keywords specific enough for news and article search.",
+          "Avoid keywords that are too broad.",
           "Return short comma-style search phrases.",
           "Use simple English.",
           "Do not include Chinese text.",
@@ -1594,7 +1694,11 @@ async function generateKeywords(categoryName = "") {
             content: [
               {
                 type: "input_text",
-                text: `News category: ${categoryName}\nReturn 6 to 10 focused search keywords.`
+                text: [
+                  `News topic title: ${categoryName}`,
+                  `Focus text: ${focus || "(none provided)"}`,
+                  "Return 6 to 10 focused search keywords as a clean structured list."
+                ].join("\n")
               }
             ]
           }
@@ -1825,6 +1929,14 @@ async function createEnglishBriefings(digest) {
   }
 }
 
+async function prepareCategoryForSearch(category) {
+  const keywords = getCategorySearchKeywords(category);
+  return {
+    ...category,
+    keywords
+  };
+}
+
 async function generateDigest(config, history = []) {
   const enabledCategories = config.categories.filter((category) => category.enabled);
   const recentMemory = buildRecentArticleMemory(history);
@@ -1836,8 +1948,10 @@ async function generateDigest(config, history = []) {
   };
 
   for (const category of enabledCategories) {
-    const itemCount = clampItemCount(category.itemCount || config.maxItemsPerCategory || 1);
-    const query = buildSearchQuery(category);
+    const searchCategory = await prepareCategoryForSearch(category);
+    const activeKeywords = getCategorySearchKeywords(searchCategory);
+    const itemCount = clampItemCount(searchCategory.itemCount || config.maxItemsPerCategory || 1);
+    const query = buildSearchQuery(searchCategory);
     const searchLimit = Math.min(Math.max(itemCount * 20, 20), 50);
     try {
       const candidateArticles = [];
@@ -1850,17 +1964,17 @@ async function generateDigest(config, history = []) {
 
       let articles = selectUniqueArticlesForCategory(
         candidateArticles,
-        category,
+        searchCategory,
         itemCount,
         recentMemory,
         currentRunMemory
       );
 
       if (articles.length < itemCount) {
-        candidateArticles.push(...await searchFallbackFeeds(category, searchLimit));
+        candidateArticles.push(...await searchFallbackFeeds(searchCategory, searchLimit));
         articles = selectUniqueArticlesForCategory(
           candidateArticles,
-          category,
+          searchCategory,
           itemCount,
           recentMemory,
           currentRunMemory
@@ -1872,13 +1986,13 @@ async function generateDigest(config, history = []) {
       }
 
       digest.categories.push({
-        id: category.id,
-        name: getCategoryDisplayName(category),
-        keywords: category.keywords || [],
+        id: searchCategory.id,
+        name: getCategoryDisplayName(searchCategory),
+        keywords: activeKeywords,
         itemCount,
-        researchFocused: Boolean(category.researchFocused),
-        companyFocused: Boolean(category.companyFocused),
-        politicalFocused: Boolean(category.politicalFocused),
+        researchFocused: Boolean(searchCategory.researchFocused),
+        companyFocused: Boolean(searchCategory.companyFocused),
+        politicalFocused: Boolean(searchCategory.politicalFocused),
         articles: articles.map((article) => ({
           ...article,
           originalTitle: article.title,
@@ -1890,13 +2004,13 @@ async function generateDigest(config, history = []) {
       });
     } catch (error) {
       digest.categories.push({
-        id: category.id,
-        name: getCategoryDisplayName(category),
-        keywords: category.keywords || [],
+        id: searchCategory.id,
+        name: getCategoryDisplayName(searchCategory),
+        keywords: activeKeywords,
         itemCount,
-        researchFocused: Boolean(category.researchFocused),
-        companyFocused: Boolean(category.companyFocused),
-        politicalFocused: Boolean(category.politicalFocused),
+        researchFocused: Boolean(searchCategory.researchFocused),
+        companyFocused: Boolean(searchCategory.companyFocused),
+        politicalFocused: Boolean(searchCategory.politicalFocused),
         articles: [],
         error: error.message || "No new non-repeated articles were found for this category today."
       });
@@ -2232,10 +2346,11 @@ async function handleApi(req, res) {
     if (!session) return;
     const body = await readRequestBody(req);
     const categoryName = cleanKeyword(body.categoryName || "");
-    if (!categoryName) {
-      return sendJson(res, 400, { error: "Category name is required." });
+    const focus = cleanFocus(body.focus || "");
+    if (!categoryName && !focus) {
+      return sendJson(res, 400, { error: "Category name or focus is required." });
     }
-    return sendJson(res, 200, await generateKeywords(categoryName));
+    return sendJson(res, 200, await generateKeywords(categoryName || "Custom topic", focus));
   }
   if (req.method === "POST" && url.pathname === "/api/run") {
     const session = requireSession(req, res);

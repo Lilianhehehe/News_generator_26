@@ -13,6 +13,7 @@
 - Vercel Hobby Cron calls `/api/cron` once per day at 12:00 UTC. The Vercel Cron route sends when called and skips if an email was already sent on the same local date. The local background scheduler still checks the configured timezone and send time.
 - The shared app logic remains in `server.js`. API route files should import and reuse `handleApi` instead of duplicating news generation code.
 - `vercel.json` must keep explicit builds and routes so Vercel serves `public/` as static files and `api/*.js` as serverless functions, instead of using the local `server.js` file as the production root entrypoint.
+- Topic search uses `focus` as the source of truth; `generatedKeywords` are suggestions only, and legacy `keywords` should seed `focus` for old saved topics.
 
 ## News Writing Rules
 

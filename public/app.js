@@ -19,6 +19,141 @@ let state = null;
 let userEmail = "";
 const keywordTimers = new WeakMap();
 
+function parseKeywords(value = "") {
+  return String(value)
+    .split(/[,，;\n]/)
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
+}
+
+function normalizeKeyword(value = "") {
+  return String(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function focusHasKeyword(focus = "", keyword = "") {
+  const normalizedKeyword = normalizeKeyword(keyword);
+  if (!normalizedKeyword) return false;
+  return parseKeywords(focus).some((item) => normalizeKeyword(item) === normalizedKeyword);
+}
+
+function formatKeywords(keywords = []) {
+  return keywords.filter(Boolean).join(", ");
+}
+
+function getGeneratedKeywords(category = {}) {
+  if (Array.isArray(category.generatedKeywords)) return category.generatedKeywords;
+  return Array.isArray(category.keywords) ? category.keywords : [];
+}
+
+function getCustomKeywords(category = {}) {
+  if (Array.isArray(category.customKeywords)) return category.customKeywords;
+  return Array.isArray(category.keywords) ? category.keywords : [];
+}
+
+function getInitialFocus(category = {}) {
+  if (typeof category.focus === "string" && category.focus.trim()) return category.focus;
+  const legacyKeywords = getCustomKeywords(category);
+  if (legacyKeywords.length) return formatKeywords(legacyKeywords);
+  return formatKeywords(getGeneratedKeywords(category));
+}
+
+function getNodeGeneratedKeywords(node) {
+  try {
+    const parsed = JSON.parse(node.dataset.generatedKeywords || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function setNodeGeneratedKeywords(node, keywords = []) {
+  node.dataset.generatedKeywords = JSON.stringify(keywords.filter(Boolean));
+}
+
+function getSelectedKeywordIndexes(node) {
+  try {
+    const parsed = JSON.parse(node.dataset.selectedKeywordIndexes || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function setSelectedKeywordIndexes(node, indexes = []) {
+  node.dataset.selectedKeywordIndexes = JSON.stringify(indexes);
+}
+
+function renderKeywordControls(node) {
+  const generatedKeywords = getNodeGeneratedKeywords(node);
+  const selectedIndexes = new Set(getSelectedKeywordIndexes(node).map(String));
+  const generatedList = node.querySelector(".generated-keyword-list");
+  const addButton = node.querySelector(".add-keywords-to-focus");
+  const focusValue = node.querySelector(".category-focus").value;
+  const isStale = node.dataset.generatedKeywordsStale === "true";
+  const addableSelectedCount = generatedKeywords.filter((keyword, index) =>
+    selectedIndexes.has(String(index)) && !focusHasKeyword(focusValue, keyword)
+  ).length;
+  addButton.disabled = addableSelectedCount === 0;
+  addButton.textContent = addableSelectedCount ? `Add ${addableSelectedCount} to focus` : "Add to focus";
+
+  if (!generatedKeywords.length) {
+    generatedList.innerHTML = `<span class="keyword-empty">No generated keywords yet.</span>`;
+    return;
+  }
+
+  const chips = generatedKeywords
+    .map((keyword, index) => {
+      const inFocus = focusHasKeyword(focusValue, keyword);
+      const selected = selectedIndexes.has(String(index));
+      return [
+        `<button class="keyword-chip${selected ? " selected" : ""}${inFocus ? " in-focus" : ""}"`,
+        `type="button" data-keyword-index="${index}" aria-pressed="${selected}"`,
+        inFocus ? `disabled title="Already in Focus"` : "",
+        `>${escapeHtml(keyword)}</button>`
+      ].filter(Boolean).join(" ");
+    })
+    .join("");
+  generatedList.innerHTML = `${chips}${isStale ? `<span class="keyword-chip stale">Will refresh before search</span>` : ""}`;
+}
+
+function toggleKeywordSelection(node, index) {
+  const generatedKeywords = getNodeGeneratedKeywords(node);
+  const keyword = generatedKeywords[Number(index)];
+  if (focusHasKeyword(node.querySelector(".category-focus").value, keyword)) return;
+
+  const selected = new Set(getSelectedKeywordIndexes(node).map(String));
+  const key = String(index);
+  if (selected.has(key)) {
+    selected.delete(key);
+  } else {
+    selected.add(key);
+  }
+  setSelectedKeywordIndexes(node, [...selected]);
+  renderKeywordControls(node);
+}
+
+function addSelectedKeywordsToFocus(node) {
+  const focusInput = node.querySelector(".category-focus");
+  const generatedKeywords = getNodeGeneratedKeywords(node);
+  const selectedKeywords = getSelectedKeywordIndexes(node)
+    .map((index) => generatedKeywords[Number(index)])
+    .filter(Boolean);
+  const existing = focusInput.value.trim();
+  const keywordsToAdd = selectedKeywords.filter((keyword) => !focusHasKeyword(existing, keyword));
+
+  if (keywordsToAdd.length) {
+    focusInput.value = existing ? `${existing}, ${keywordsToAdd.join(", ")}` : keywordsToAdd.join(", ");
+    node.dataset.generatedKeywordsStale = "true";
+    setStatus("Added to focus");
+  } else {
+    setStatus("Already in focus");
+  }
+
+  setSelectedKeywordIndexes(node, []);
+  renderKeywordControls(node);
+  focusInput.focus();
+}
+
 function setStatus(text) {
   statusPill.textContent = text;
 }
@@ -57,36 +192,63 @@ function renderCategories() {
   state.categories.forEach((category) => {
     const node = template.content.firstElementChild.cloneNode(true);
     const nameInput = node.querySelector(".category-name");
-    const keywordsInput = node.querySelector(".category-keywords");
+    const focusInput = node.querySelector(".category-focus");
     const generateKeywordsButton = node.querySelector(".generate-keywords");
+    const addKeywordsButton = node.querySelector(".add-keywords-to-focus");
+    const advancedToggle = node.querySelector(".advanced-toggle");
     node.dataset.id = category.id;
+    node.dataset.keywordMode = "auto";
+    node.dataset.generatedKeywordsStale = category.generatedKeywordsStale ? "true" : "false";
+    setSelectedKeywordIndexes(node, []);
+    setNodeGeneratedKeywords(node, getGeneratedKeywords(category));
     node.querySelector(".category-enabled").checked = category.enabled;
     nameInput.value = category.name;
     node.querySelector(".category-count").value = category.itemCount || 1;
-    keywordsInput.value = (category.keywords || []).join(", ");
+    focusInput.value = getInitialFocus(category);
+    renderKeywordControls(node);
     node.querySelector(".remove-category").addEventListener("click", () => {
       state.categories = state.categories.filter((item) => item.id !== category.id);
       renderCategories();
+    });
+    advancedToggle.addEventListener("click", () => {
+      const advancedPanel = node.querySelector(".advanced-panel");
+      const isOpening = advancedPanel.hidden;
+      advancedPanel.hidden = !isOpening;
+      advancedToggle.setAttribute("aria-expanded", String(isOpening));
+    });
+    node.querySelector(".generated-keyword-list").addEventListener("click", (event) => {
+      const chip = event.target.closest(".keyword-chip[data-keyword-index]");
+      if (!chip) return;
+      toggleKeywordSelection(node, chip.dataset.keywordIndex);
+    });
+    addKeywordsButton.addEventListener("click", () => {
+      addSelectedKeywordsToFocus(node);
     });
     generateKeywordsButton.addEventListener("click", () => {
       generateKeywordsForCategory(node, { force: true });
     });
     nameInput.addEventListener("input", () => {
+      node.dataset.generatedKeywordsStale = "true";
+      renderKeywordControls(node);
+      scheduleKeywordGeneration(node);
+    });
+    focusInput.addEventListener("input", () => {
+      node.dataset.generatedKeywordsStale = "true";
+      renderKeywordControls(node);
       scheduleKeywordGeneration(node);
     });
     nameInput.addEventListener("blur", () => {
-      if (node.dataset.needsKeywords === "true") {
-        generateKeywordsForCategory(node);
-      }
+      generateKeywordsForCategory(node);
+    });
+    focusInput.addEventListener("blur", () => {
+      generateKeywordsForCategory(node);
     });
     categories.appendChild(node);
   });
 }
 
 function scheduleKeywordGeneration(node) {
-  if (node.dataset.needsKeywords !== "true") return;
-  const keywordsInput = node.querySelector(".category-keywords");
-  if (keywordsInput.value.trim()) return;
+  if (getNodeGeneratedKeywords(node).length) return;
 
   clearTimeout(keywordTimers.get(node));
   keywordTimers.set(node, setTimeout(() => {
@@ -96,26 +258,29 @@ function scheduleKeywordGeneration(node) {
 
 async function generateKeywordsForCategory(node, { force = false } = {}) {
   const nameInput = node.querySelector(".category-name");
-  const keywordsInput = node.querySelector(".category-keywords");
+  const focusInput = node.querySelector(".category-focus");
   const button = node.querySelector(".generate-keywords");
   const categoryName = nameInput.value.trim();
+  const focus = focusInput.value.trim();
 
-  if (!categoryName || categoryName === "New Category") return;
-  if (!force && keywordsInput.value.trim()) return;
+  if ((!categoryName || categoryName === "New Category") && !focus) return;
+  if (!force && getNodeGeneratedKeywords(node).length && node.dataset.generatedKeywordsStale !== "true") return;
 
   clearTimeout(keywordTimers.get(node));
   button.disabled = true;
+  setSelectedKeywordIndexes(node, []);
   button.textContent = "Generating";
   setStatus("Generating keywords");
 
   try {
     const result = await api("/api/keywords", {
       method: "POST",
-      body: JSON.stringify({ categoryName })
+      body: JSON.stringify({ categoryName: categoryName || "Untitled", focus })
     });
     if (Array.isArray(result.keywords) && result.keywords.length) {
-      keywordsInput.value = result.keywords.join(", ");
-      node.dataset.needsKeywords = "false";
+      setNodeGeneratedKeywords(node, result.keywords);
+      node.dataset.generatedKeywordsStale = "false";
+      renderKeywordControls(node);
       setStatus("Keywords ready");
     }
   } catch (error) {
@@ -123,7 +288,7 @@ async function generateKeywordsForCategory(node, { force = false } = {}) {
     alert(error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "Generate Keywords";
+    button.textContent = "Regenerate keywords";
   }
 }
 
@@ -133,18 +298,27 @@ function readFormState() {
     senderEmail: userEmail,
     recipientEmail: userEmail,
     sendTime: sendTime.value || "08:00",
-    categories: [...categories.querySelectorAll(".category-card")].map((node) => ({
-      id: node.dataset.id,
-      enabled: node.querySelector(".category-enabled").checked,
-      name: node.querySelector(".category-name").value.trim() || "Untitled",
-      itemCount: Number(node.querySelector(".category-count").value || 1),
-      researchFocused: state.categories.find((item) => item.id === node.dataset.id)?.researchFocused || false,
-      companyFocused: state.categories.find((item) => item.id === node.dataset.id)?.companyFocused || false,
-      keywords: node.querySelector(".category-keywords").value
-        .split(/[,，\n]/)
-        .map((keyword) => keyword.trim())
-        .filter(Boolean)
-    }))
+    categories: [...categories.querySelectorAll(".category-card")].map((node) => {
+      const previous = state.categories.find((item) => item.id === node.dataset.id) || {};
+      const generatedKeywords = getNodeGeneratedKeywords(node);
+      const focus = node.querySelector(".category-focus").value.trim();
+      const keywords = parseKeywords(focus);
+      return {
+        id: node.dataset.id,
+        enabled: node.querySelector(".category-enabled").checked,
+        name: node.querySelector(".category-name").value.trim() || "Untitled",
+        focus,
+        itemCount: Number(node.querySelector(".category-count").value || 1),
+        researchFocused: previous.researchFocused || false,
+        companyFocused: previous.companyFocused || false,
+        politicalFocused: previous.politicalFocused || false,
+        keywordMode: "auto",
+        generatedKeywords,
+        customKeywords: keywords,
+        generatedKeywordsStale: node.dataset.generatedKeywordsStale === "true",
+        keywords
+      };
+    })
   };
 }
 
@@ -239,12 +413,16 @@ addCategory.addEventListener("click", () => {
     name: "New Category",
     enabled: true,
     itemCount: 1,
+    focus: "",
+    keywordMode: "auto",
+    generatedKeywords: [],
+    customKeywords: [],
+    generatedKeywordsStale: true,
     keywords: []
   });
   renderCategories();
   const newNode = categories.lastElementChild;
   if (newNode) {
-    newNode.dataset.needsKeywords = "true";
     newNode.querySelector(".category-name").select();
   }
 });

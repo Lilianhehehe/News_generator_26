@@ -25,7 +25,7 @@
           <div>
             <p class="kicker">Morning Desk</p>
             <h1>Daily News Brief</h1>
-            <p class="lede">Choose topics, keywords, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
+            <p class="lede">Choose topics, focus, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
           </div>
           <div class="masthead-actions">
             <span id="currentUser" class="user-pill"></span>
@@ -96,12 +96,24 @@
           <button class="icon-button remove-category" type="button" aria-label="Remove">×</button>
         </div>
         <label class="field compact">
-          <span class="keyword-label">
-            <span>Keywords, separated by commas</span>
-            <button class="keyword-button generate-keywords" type="button">Generate Keywords</button>
-          </span>
-          <textarea class="category-keywords" rows="2"></textarea>
+          <span>Focus</span>
+          <textarea class="category-focus" rows="3" placeholder="Describe what this topic should focus on..."></textarea>
         </label>
+        <div class="advanced-search">
+          <button class="advanced-toggle" type="button" aria-expanded="false">Advanced search settings</button>
+          <div class="advanced-panel" hidden>
+            <div class="auto-keyword-panel">
+              <div class="keyword-label">
+                <span>Generated keywords</span>
+                <span class="keyword-actions">
+                  <button class="keyword-button add-keywords-to-focus" type="button" disabled>Add to focus</button>
+                  <button class="keyword-button generate-keywords" type="button">Regenerate keywords</button>
+                </span>
+              </div>
+              <div class="generated-keyword-list"></div>
+            </div>
+          </div>
+        </div>
       </article>
     </template>
 
