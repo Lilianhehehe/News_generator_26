@@ -29,6 +29,9 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 120_000);
 const OPENAI_MAX_OUTPUT_TOKENS = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 14_000);
 const OPENAI_MAX_REWRITE_ATTEMPTS = Number(process.env.OPENAI_MAX_REWRITE_ATTEMPTS || 4);
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
+const ANTHROPIC_TIMEOUT_MS = Number(process.env.ANTHROPIC_TIMEOUT_MS || 60_000);
+const ANTHROPIC_MAX_OUTPUT_TOKENS = Number(process.env.ANTHROPIC_MAX_OUTPUT_TOKENS || 2_048);
 const NEWS_MAX_AGE_DAYS = 10;
 const NEWS_MAX_AGE_MS = NEWS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 const NEWS_FEED_TIMEOUT_MS = Number(process.env.NEWS_FEED_TIMEOUT_MS || 20_000);
@@ -1549,6 +1552,152 @@ function formatOpenAIError(status, body) {
   }
 }
 
+function formatAnthropicError(status, body) {
+  try {
+    const parsed = JSON.parse(body);
+    return parsed.error?.message || `Anthropic API returned ${status}`;
+  } catch {
+    return `Anthropic API returned ${status}: ${body.slice(0, 180)}`;
+  }
+}
+
+const BULLET_CONVERSION_SYSTEM_PROMPT = [
+  "You convert research and news summaries from paragraph form into bullet points. You always respond with only the bullet points and nothing else — no preamble, no labels, no explanation.",
+  "",
+  "Rules:",
+  "1. Plain bullets only, each starting with \"- \". Do NOT use section labels like \"What happened\" or \"Why it matters\". Do not repeat the title or timestamp.",
+  "2. Every bullet is a direct declarative statement about the subject itself. NEVER write about the article: no \"The article...\", \"The piece covers...\", \"It notes...\", \"An overview explains...\". Bad: \"It describes how Japan works with other countries on trade deals.\" Good: \"Japan negotiates trade deals and security partnerships with other countries.\"",
+  "3. Write 2 to 5 substantial bullets, not many one-line fragments. Group closely related ideas into the same bullet (a bullet may have 1-3 short sentences). Do not start every bullet with the same word — vary sentence openings.",
+  "4. Be specific: keep every concrete actor, action, number, date, place, mechanism, and consequence that the paragraph contains. Drop pure filler that carries no information (e.g. \"this shapes its relations with other nations\"). Never drop key qualifiers (e.g. \"no direct treatment reported yet\").",
+  "5. Strictly no new information: do not add facts, examples, names, or numbers that are not in the original paragraph — not even well-known ones. This is a reformatting task only. If the paragraph contains few specifics, output fewer, shorter bullets instead of padding."
+].join("\n");
+
+const TRANSLATION_SYSTEM_PROMPT = [
+  "You translate English news and research bullet points into Simplified Chinese. You respond with only the translated text and nothing else — no preamble, no explanation, no pinyin.",
+  "",
+  "Rules:",
+  "1. Keep the exact same structure: same number of bullets, same line breaks. Every line that starts with \"- \" in the input must start with \"- \" in the output.",
+  "2. Write natural, idiomatic, everyday Chinese — the way a normal person would explain it, not a stiff machine translation. Use simple, common words; avoid rare or overly formal/literary vocabulary.",
+  "3. Do not add, drop, or change any facts. Translate faithfully; do not summarize or embellish.",
+  "4. Keep established scientific terms accurate (e.g. glycosylation → 糖基化, hippocampus → 海马体), but phrase the surrounding sentence plainly.",
+  "5. Translate a date/time line into natural Chinese (e.g. \"7/5/2026, 8:00:00 PM\" → \"2026年7月5日，晚上8:00\")."
+].join("\n");
+
+async function runTextModel(systemPrompt, userMessage, { maxTokens } = {}) {
+  if (process.env.ANTHROPIC_API_KEY) {
+    return runTextModelWithClaude(systemPrompt, userMessage, maxTokens);
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return runTextModelWithOpenAI(systemPrompt, userMessage, maxTokens);
+  }
+  throw new Error("Set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable this feature.");
+}
+
+async function runTextModelWithClaude(systemPrompt, userMessage, maxTokens) {
+  const { controller, timer } = withTimeout(ANTHROPIC_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: maxTokens || ANTHROPIC_MAX_OUTPUT_TOKENS,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMessage }]
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(formatAnthropicError(response.status, body));
+    }
+
+    const responseJson = await response.json();
+    if (responseJson.stop_reason === "refusal") {
+      throw new Error("The model declined this request.");
+    }
+    const text = (responseJson.content || [])
+      .filter((block) => block.type === "text" && block.text)
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+    if (!text) {
+      throw new Error("The model returned an empty response.");
+    }
+    return { text, generatedBy: ANTHROPIC_MODEL };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runTextModelWithOpenAI(systemPrompt, userMessage, maxTokens) {
+  const { controller, timer } = withTimeout(OPENAI_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        max_output_tokens: maxTokens || 2000,
+        reasoning: { effort: "minimal" },
+        instructions: systemPrompt,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: userMessage }]
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(formatOpenAIError(response.status, body));
+    }
+
+    const text = extractResponseText(await response.json()).trim();
+    if (!text) {
+      throw new Error("The model returned an empty response.");
+    }
+    return { text, generatedBy: OPENAI_MODEL };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function convertSummaryToBullets({ title = "", timestamp = "", paragraph = "" }) {
+  const userMessage = [
+    "Convert the following summary into bullet point format:",
+    "",
+    `Title: ${title}`,
+    `Timestamp: ${timestamp}`,
+    `Paragraph: ${paragraph}`
+  ].join("\n");
+
+  const { text, generatedBy } = await runTextModel(BULLET_CONVERSION_SYSTEM_PROMPT, userMessage);
+  return { bullets: text, generatedBy };
+}
+
+async function translateToChinese({ text = "" }) {
+  const userMessage = [
+    "Translate the following English text into natural, simple Simplified Chinese. Keep the same line and bullet structure.",
+    "",
+    text
+  ].join("\n");
+
+  const { text: translation, generatedBy } = await runTextModel(TRANSLATION_SYSTEM_PROMPT, userMessage);
+  return { translation, generatedBy };
+}
+
 function cleanKeyword(value = "") {
   return String(value)
     .replace(/[，;|]/g, ",")
@@ -2352,6 +2501,40 @@ async function handleApi(req, res) {
     }
     return sendJson(res, 200, await generateKeywords(categoryName || "Custom topic", focus));
   }
+  if (req.method === "POST" && url.pathname === "/api/bullets") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const body = await readRequestBody(req);
+    const paragraph = String(body.paragraph || "").trim();
+    if (!paragraph) {
+      return sendJson(res, 400, { error: "Paragraph is required." });
+    }
+    try {
+      const result = await convertSummaryToBullets({
+        title: String(body.title || "").trim(),
+        timestamp: String(body.timestamp || "").trim(),
+        paragraph
+      });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 502, { error: error.message || "Bullet point conversion failed." });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/translate") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const body = await readRequestBody(req);
+    const text = String(body.text || "").trim();
+    if (!text) {
+      return sendJson(res, 400, { error: "Text is required." });
+    }
+    try {
+      const result = await translateToChinese({ text });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 502, { error: error.message || "Translation failed." });
+    }
+  }
   if (req.method === "POST" && url.pathname === "/api/run") {
     const session = requireSession(req, res);
     if (!session) return;
@@ -2371,7 +2554,7 @@ async function handleApi(req, res) {
   sendJson(res, 404, { error: "Not found" });
 }
 
-export { handleApi, runDigest, runScheduledDigest };
+export { handleApi, runDigest, runScheduledDigest, convertSummaryToBullets, translateToChinese };
 
 if (IS_DIRECT_RUN) {
   await ensureDataFiles();

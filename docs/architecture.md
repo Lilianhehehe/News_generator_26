@@ -72,6 +72,7 @@ Major features are documented in:
 - `docs/features/topic-filtering.md`
 - `docs/features/news-sources.md`
 - `docs/features/summarization.md`
+- `docs/features/summary-format.md`
 - `docs/features/email-delivery.md`
 - `docs/features/account-login.md`
 

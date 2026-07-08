@@ -51,6 +51,8 @@ KV_REST_API_TOKEN=...
 Optional:
 
 ```text
+ANTHROPIC_API_KEY=...
+ANTHROPIC_MODEL=claude-opus-4-8
 OPENAI_MODEL=gpt-5-mini
 GMAIL_USER=your-sender@gmail.com
 CRON_SECRET=some-long-secret
@@ -105,6 +107,16 @@ npm start
 ```
 
 The default model is `gpt-5-mini`. If `OPENAI_API_KEY` is not set, the app searches news but does not show short fallback summaries as final output.
+
+## Claude API setup (bullet-point view)
+
+The results page has a `Paragraph | Bullet Points` toggle. Bullet conversion happens at runtime. If `ANTHROPIC_API_KEY` is set, it uses the Claude API (default model `claude-opus-4-8`, override with `ANTHROPIC_MODEL`):
+
+```bash
+export ANTHROPIC_API_KEY="your Anthropic API key"
+```
+
+If not, it falls back to the existing `OPENAI_API_KEY` with `OPENAI_MODEL`. If neither key is set, paragraph mode still works and the bullet view shows a per-item error.
 
 ## Data storage
 

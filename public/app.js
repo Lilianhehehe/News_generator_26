@@ -14,10 +14,24 @@ const runNow = document.querySelector("#runNow");
 const statusPill = document.querySelector("#status");
 const preview = document.querySelector("#preview");
 const template = document.querySelector("#categoryTemplate");
+const formatToggle = document.querySelector("#formatToggle");
+const formatParagraph = document.querySelector("#formatParagraph");
+const formatBullets = document.querySelector("#formatBullets");
+const langEnglish = document.querySelector("#langEnglish");
+const langChinese = document.querySelector("#langChinese");
 
 let state = null;
 let userEmail = "";
+let lastDigestResult = null;
+let summaryFormat = localStorage.getItem("summaryFormat") === "bullets" ? "bullets" : "paragraph";
+let language = localStorage.getItem("resultLanguage") === "zh" ? "zh" : "en";
 const keywordTimers = new WeakMap();
+const bulletCache = new Map();
+const translationCache = new Map();
+let deferredSummaries = new Map();
+let summaryIdCounter = 0;
+let translateSources = new Map();
+let translateIdCounter = 0;
 
 function parseKeywords(value = "") {
   return String(value)
@@ -322,37 +336,215 @@ function readFormState() {
   };
 }
 
+function getBulletCacheKey(article) {
+  return `${article.title}|${article.summary}`;
+}
+
+function formatInlineBold(value = "") {
+  return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function renderBulletHtml(text = "") {
+  const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let listItems = [];
+  const flushList = () => {
+    if (listItems.length) {
+      html.push(`<ul class="bullet-list">${listItems.join("")}</ul>`);
+      listItems = [];
+    }
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const bulletMatch = trimmed.match(/^[-*•]\s+(.*)$/);
+    if (bulletMatch) {
+      listItems.push(`<li>${formatInlineBold(bulletMatch[1])}</li>`);
+    } else {
+      flushList();
+      html.push(`<p>${formatInlineBold(trimmed)}</p>`);
+    }
+  }
+  flushList();
+  return html.join("");
+}
+
+async function getBullets(article) {
+  const key = getBulletCacheKey(article);
+  if (bulletCache.has(key)) return bulletCache.get(key);
+  const result = await api("/api/bullets", {
+    method: "POST",
+    body: JSON.stringify({
+      title: article.title,
+      timestamp: enArticleTime(article),
+      paragraph: article.summary
+    })
+  });
+  bulletCache.set(key, result.bullets);
+  return result.bullets;
+}
+
+async function getTranslation(text) {
+  if (translationCache.has(text)) return translationCache.get(text);
+  const result = await api("/api/translate", {
+    method: "POST",
+    body: JSON.stringify({ text })
+  });
+  translationCache.set(text, result.translation);
+  return result.translation;
+}
+
+function renderSummaryInner(text, isBullets) {
+  return isBullets ? renderBulletHtml(text) : escapeHtml(text);
+}
+
+function articleSummaryHtml(article) {
+  const isBullets = summaryFormat === "bullets";
+  const classes = isBullets ? "article-summary bullet-summary" : "article-summary";
+  const english = isBullets
+    ? (bulletCache.has(getBulletCacheKey(article)) ? bulletCache.get(getBulletCacheKey(article)) : null)
+    : article.summary;
+
+  if (english !== null) {
+    if (language !== "zh") {
+      return `<div class="${classes}">${renderSummaryInner(english, isBullets)}</div>`;
+    }
+    if (translationCache.has(english)) {
+      return `<div class="${classes}">${renderSummaryInner(translationCache.get(english), isBullets)}</div>`;
+    }
+  }
+
+  const id = String(summaryIdCounter += 1);
+  deferredSummaries.set(id, { article, isBullets });
+  const inner = english !== null
+    ? renderSummaryInner(english, isBullets)
+    : escapeHtml(language === "zh" ? "正在生成…" : "Converting to bullet points…");
+  return `<div class="${classes} summary-pending" data-summary-id="${id}">${inner}</div>`;
+}
+
+async function fillSummaries() {
+  const nodes = [...preview.querySelectorAll(".summary-pending[data-summary-id]")];
+  await Promise.all(nodes.map(async (element) => {
+    const source = deferredSummaries.get(element.dataset.summaryId);
+    if (!source) return;
+    const { article, isBullets } = source;
+    try {
+      const english = isBullets ? await getBullets(article) : article.summary;
+      const display = language === "zh" ? await getTranslation(english) : english;
+      if (!element.isConnected) return;
+      element.classList.remove("summary-pending");
+      element.removeAttribute("data-summary-id");
+      element.innerHTML = renderSummaryInner(display, isBullets);
+    } catch (error) {
+      if (!element.isConnected) return;
+      element.classList.remove("summary-pending");
+      element.classList.add("bullet-error");
+      element.textContent = error.message || "Failed to process this summary.";
+    }
+  }));
+}
+
+function tText(value) {
+  const text = String(value ?? "");
+  if (language !== "zh" || !text.trim()) return escapeHtml(text);
+  if (translationCache.has(text)) return escapeHtml(translationCache.get(text));
+  const id = String(translateIdCounter += 1);
+  translateSources.set(id, text);
+  return `<span class="text-pending" data-translate-id="${id}">${escapeHtml(text)}</span>`;
+}
+
+async function fillTranslations() {
+  const nodes = [...preview.querySelectorAll(".text-pending[data-translate-id]")];
+  await Promise.all(nodes.map(async (element) => {
+    const text = translateSources.get(element.dataset.translateId);
+    if (text == null) return;
+    try {
+      const zh = await getTranslation(text);
+      if (!element.isConnected || language !== "zh") return;
+      element.classList.remove("text-pending");
+      element.removeAttribute("data-translate-id");
+      element.textContent = zh;
+    } catch {
+      // Leave the English fallback in place on failure.
+    }
+  }));
+}
+
 function renderDigest(result) {
+  lastDigestResult = result;
+  deferredSummaries = new Map();
+  translateSources = new Map();
   const digest = result.digest;
   const sections = digest.categories.map((category) => {
     const items = category.articles.map((article) => `
       <li>
-        <a href="${escapeHtml(article.link)}" target="_blank" rel="noreferrer">${escapeHtml(article.title)}</a>
-        <div class="article-summary">${escapeHtml(article.summary)}</div>
+        <a href="${escapeHtml(article.link)}" target="_blank" rel="noreferrer">${tText(article.title)}</a>
+        ${articleSummaryHtml(article)}
         <small>${escapeHtml(formatArticleTime(article))}</small>
       </li>
     `).join("");
+    const emptyHtml = category.error
+      ? tText(category.error)
+      : escapeHtml(language === "zh" ? "今天没有找到相关文章。" : "No relevant articles were found today.");
     return `
-      <h3>${escapeHtml(category.name)}</h3>
-      <ol>${items || `<li>${escapeHtml(category.error || "No relevant articles were found today.")}</li>`}</ol>
+      <h3>${tText(category.name)}</h3>
+      <ol>${items || `<li>${emptyHtml}</li>`}</ol>
     `;
   }).join("");
 
   preview.className = "digest";
-  const briefingMessage = digest.briefingResult?.message ? `<p>${escapeHtml(digest.briefingResult.message)}</p>` : "";
+  const briefingMessage = digest.briefingResult?.message ? `<p>${tText(digest.briefingResult.message)}</p>` : "";
+  const generatedLabel = language === "zh" ? "生成时间：" : "Generated at: ";
   preview.innerHTML = `
-    <p>${escapeHtml(result.emailResult.message)}</p>
+    <p>${tText(result.emailResult.message)}</p>
     ${briefingMessage}
-    <p>Generated at: ${new Date(digest.generatedAt).toLocaleString("en-US")}</p>
+    <p>${escapeHtml(generatedLabel)}${escapeHtml(new Date(digest.generatedAt).toLocaleString(currentLocale()))}</p>
     ${sections}
   `;
+  fillSummaries();
+  if (language === "zh") fillTranslations();
+}
+
+function applySummaryFormat(format) {
+  summaryFormat = format === "bullets" ? "bullets" : "paragraph";
+  localStorage.setItem("summaryFormat", summaryFormat);
+  formatParagraph.setAttribute("aria-pressed", String(summaryFormat === "paragraph"));
+  formatBullets.setAttribute("aria-pressed", String(summaryFormat === "bullets"));
+  formatParagraph.classList.toggle("active", summaryFormat === "paragraph");
+  formatBullets.classList.toggle("active", summaryFormat === "bullets");
+  if (lastDigestResult) {
+    renderDigest(lastDigestResult);
+  }
+}
+
+function applyLanguage(lang) {
+  language = lang === "zh" ? "zh" : "en";
+  localStorage.setItem("resultLanguage", language);
+  langEnglish.setAttribute("aria-pressed", String(language === "en"));
+  langChinese.setAttribute("aria-pressed", String(language === "zh"));
+  langEnglish.classList.toggle("active", language === "en");
+  langChinese.classList.toggle("active", language === "zh");
+  if (lastDigestResult) {
+    renderDigest(lastDigestResult);
+  }
+}
+
+function currentLocale() {
+  return language === "zh" ? "zh-CN" : "en-US";
+}
+
+function enArticleTime(article) {
+  if (!article.publishedAt) return "";
+  const date = new Date(article.publishedAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US");
 }
 
 function formatArticleTime(article) {
   if (!article.publishedAt) return "";
   const date = new Date(article.publishedAt);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("en-US");
+  return date.toLocaleString(currentLocale());
 }
 
 function escapeHtml(value = "") {
@@ -376,11 +568,33 @@ async function saveConfig() {
 function resetAppView() {
   userEmail = "";
   state = null;
+  lastDigestResult = null;
+  deferredSummaries = new Map();
+  translateSources = new Map();
   categories.innerHTML = "";
   preview.className = "preview-empty";
   preview.textContent = "Save your settings, then click \"Generate Now\" to test once.";
   setStatus("Ready");
 }
+
+formatParagraph.addEventListener("click", () => {
+  applySummaryFormat("paragraph");
+});
+
+formatBullets.addEventListener("click", () => {
+  applySummaryFormat("bullets");
+});
+
+langEnglish.addEventListener("click", () => {
+  applyLanguage("en");
+});
+
+langChinese.addEventListener("click", () => {
+  applyLanguage("zh");
+});
+
+applySummaryFormat(summaryFormat);
+applyLanguage(language);
 
 signOut.addEventListener("click", async () => {
   await api("/api/auth/logout", { method: "POST" });

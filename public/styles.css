@@ -569,3 +569,60 @@ button.keyword-chip.in-focus:hover {
     justify-content: stretch;
   }
 }
+
+.result-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.format-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.format-option {
+  border: 0;
+  background: transparent;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.format-option.active {
+  background: var(--green);
+  color: var(--panel);
+}
+
+.bullet-summary {
+  white-space: normal;
+}
+
+.bullet-summary .bullet-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.bullet-summary .bullet-list li {
+  margin-bottom: 4px;
+}
+
+.bullet-loading {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.summary-pending,
+.text-pending {
+  opacity: 0.55;
+}
+
+.bullet-error {
+  color: var(--accent);
+}
