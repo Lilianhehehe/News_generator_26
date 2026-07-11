@@ -1490,7 +1490,7 @@ function getGeneratedArticleIssues(article) {
   if (containsChineseText(title) || containsChineseText(summary)) {
     issues.push("contains Chinese text");
   }
-  if (wordCount < 70) {
+  if (wordCount < 60) {
     issues.push(`summary has ${wordCount} words; it must be more detailed and usually about 90-130 simple English words when the article data supports it`);
   }
   if (wordCount > 160) {
@@ -1524,6 +1524,55 @@ function validateGeneratedArticles(generatedArticles = [], expectedArticles = []
 
 function isValidGeneratedArticle(article) {
   return getGeneratedArticleIssues(article).length === 0;
+}
+
+// Assembles the final per-category article list from the model output.
+// Hard requirement: every category that has a candidate article must show news.
+// A category ends up empty ONLY when the search found no candidate articles for it.
+// When the model summary is unusable (missing or contains Chinese) we fall back to a
+// snippet-based English summary instead of dropping the article and emptying the category.
+function finalizeBriefingCategories(digest, generatedArticles = []) {
+  const generatedByKey = new Map(
+    generatedArticles.map((article) => [getArticleKey(article), article])
+  );
+  let fallbackCount = 0;
+
+  for (const category of digest.categories) {
+    const finalArticles = [];
+    for (const article of category.articles) {
+      const generated = generatedByKey.get(`${category.id}|${article.link}`);
+      const englishTitle = normalizeEnglishTitle(generated?.englishTitle) || fallbackEnglishTitle(article);
+      const englishSummary = normalizeEnglishSummary(generated?.englishSummary);
+      const modelSummaryUsable = Boolean(englishSummary)
+        && !containsChineseText(englishSummary)
+        && !containsChineseText(englishTitle);
+
+      let summary;
+      if (modelSummaryUsable) {
+        summary = englishSummary;
+        if (!isValidGeneratedArticle(generated)) fallbackCount += 1;
+      } else {
+        const snippetSummary = summarizeArticle(article);
+        summary = containsChineseText(snippetSummary)
+          ? `This story covers "${englishTitle}." Open the link to read the full report.`
+          : snippetSummary;
+        fallbackCount += 1;
+      }
+
+      finalArticles.push({
+        ...article,
+        originalTitle: article.title,
+        title: englishTitle,
+        summary
+      });
+    }
+    category.articles = finalArticles;
+    if (!category.articles.length && !category.error) {
+      category.error = "No relevant articles were found today.";
+    }
+  }
+
+  return fallbackCount;
 }
 
 function extractResponseText(responseJson) {
@@ -2024,40 +2073,14 @@ async function createEnglishBriefings(digest) {
       if (!validationIssues.length) break;
     }
 
-    const byKey = new Map(
-      (parsed.articles || [])
-        .filter(isValidGeneratedArticle)
-        .map((article) => [getArticleKey(article), article])
-    );
-    let hiddenCount = 0;
-
-    for (const category of digest.categories) {
-      const validatedArticles = [];
-      for (const article of category.articles) {
-        const generated = byKey.get(`${category.id}|${article.link}`);
-        if (!generated) {
-          hiddenCount += 1;
-          continue;
-        }
-        validatedArticles.push({
-          ...article,
-          originalTitle: article.title,
-          title: normalizeEnglishTitle(generated.englishTitle) || fallbackEnglishTitle(article),
-          summary: normalizeEnglishSummary(generated.englishSummary)
-        });
-      }
-      category.articles = validatedArticles;
-      if (!category.articles.length && !category.error) {
-        category.error = "No validated detailed summary was generated for this category.";
-      }
-    }
+    const fallbackCount = finalizeBriefingCategories(digest, parsed.articles || []);
 
     return {
       digest,
       briefingResult: {
         enhanced: true,
-        message: hiddenCount
-          ? `English briefing generated with ${OPENAI_MODEL}. ${hiddenCount} item(s) failed the detail validation and were hidden.`
+        message: fallbackCount
+          ? `English briefing generated with ${OPENAI_MODEL}. ${fallbackCount} item(s) used a shorter fallback summary.`
           : `English briefing generated with ${OPENAI_MODEL}.`
       }
     };
@@ -2554,7 +2577,7 @@ async function handleApi(req, res) {
   sendJson(res, 404, { error: "Not found" });
 }
 
-export { handleApi, runDigest, runScheduledDigest, convertSummaryToBullets, translateToChinese };
+export { handleApi, runDigest, runScheduledDigest, convertSummaryToBullets, translateToChinese, finalizeBriefingCategories };
 
 if (IS_DIRECT_RUN) {
   await ensureDataFiles();
