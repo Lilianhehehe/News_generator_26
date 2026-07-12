@@ -177,6 +177,10 @@ async function api(path, options = {}) {
     headers: { "content-type": "application/json" },
     ...options
   });
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(`Server returned ${response.status} for ${path}`);
+  }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Request failed");
   return data;

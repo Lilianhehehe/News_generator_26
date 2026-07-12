@@ -1,6 +1,16 @@
 # 每日邮件发送问题 —— 交接总结
 
-> 用于跨对话交接。记录截至 2026-07-08 的排查进展、结论与卡点。
+> 用于跨对话交接。最初记录截至 2026-07-08 的排查进展；2026-07-11 已更新解决状态。
+
+## 2026-07-11 状态更新
+
+- 已确认真实生产地址为 `https://news-generator-psi.vercel.app`。
+- Vercel 已连接 GitHub `main`，push 后会自动部署；栏目补全修复提交已显示为 Production Ready。
+- Vercel 所需的 Redis、Google OAuth、OpenAI 和 `AUTH_SECRET` 环境变量已配置，云端可解密已有 OAuth 授权。
+- Redis 用户历史显示 2026-07-11 的邮件由云端定时任务成功发送，本地 Mac 不是当前可靠的发送路径。
+- 原先“找不到部署、线上仍是老代码、环境变量待确认”的核心卡点均已解决，下文保留为历史排查记录。
+- 2026-07-11 发现 `/api/auth/*` 被通用 Vercel 路由映射到不存在的嵌套文件，导致网页登录 404；现已新增共享 `api/auth.js` 入口和优先路由。部署后需确认 `/api/auth/session` 返回 JSON，并完成一次 Google 登录。
+- `CRON_SECRET` 仍是可选配置；生产环境尚需确认是否设置，以避免公开触发 cron。
 
 ## 项目背景
 - 项目路径:`/Users/lisa/Desktop/AI Projects/News Generator`(注意在**桌面**上,这点很关键,见文末)

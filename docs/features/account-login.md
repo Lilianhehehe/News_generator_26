@@ -7,6 +7,8 @@ Account login uses Google OAuth so a user must prove control of their Gmail addr
 ## Related Files
 
 - `server.js`: OAuth routes, signed session cookies, encrypted token storage, session-protected APIs, and user-scoped config/history.
+- `api/auth.js`: shared Vercel serverless entrypoint for all `/api/auth/*` routes.
+- `vercel.json`: routes `/api/auth/*` to `api/auth.js` before the general API-file route.
 - `public/index.html`: Google sign-in panel, current-user display, sign-out, and disconnect controls.
 - `public/app.js`: loads the signed-in session, blocks the app while signed out, and no longer sends user email as trusted input.
 - `public/styles.css`: Google sign-in, auth error, and read-only Gmail field styles.
@@ -35,6 +37,7 @@ Account login uses Google OAuth so a user must prove control of their Gmail addr
 ## Edge Cases
 
 - If OAuth env vars are missing, the login screen shows which variables are missing.
+- Vercel OAuth routes share one serverless entrypoint; the original `/api/auth/*` path is dispatched by `handleApi`.
 - If Gmail send permission is not granted, the app asks the user to reconnect Google.
 - If Google token refresh fails later, scheduled sending skips that user and marks reconnect needed.
 - Sender and recipient Gmail addresses are always the verified session email.
@@ -45,6 +48,7 @@ Account login uses Google OAuth so a user must prove control of their Gmail addr
 - Visit the app signed out and confirm only Google sign-in is available.
 - Call `/api/config` signed out and confirm it returns 401.
 - Complete Google OAuth and confirm `/api/auth/session` returns the verified email.
+- On Vercel, confirm `/api/auth/session` returns JSON rather than a platform 404 page before testing the Google redirect.
 - Confirm sender and recipient fields are read-only and match the verified email.
 - Sign out and confirm the app returns to the login screen.
 - Disconnect Google and confirm scheduled sending stops for that user.
