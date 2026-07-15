@@ -237,6 +237,31 @@ h2 {
   flex: 1;
 }
 
+.daily-send-setting {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  background: #fbf7ed;
+  cursor: pointer;
+}
+
+.daily-send-copy {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.daily-send-copy strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
 input,
 textarea {
   width: 100%;

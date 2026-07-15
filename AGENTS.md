@@ -11,6 +11,7 @@
 - Local runs use `data/config.json` and `data/history.json`. Vercel runs should use Upstash Redis through `KV_REST_API_URL` and `KV_REST_API_TOKEN`; the app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
 - User accounts use Google OAuth. Settings, history, and encrypted Google auth data are scoped by verified Gmail address under `data/users/`; Redis user data uses `NEWS_USERS_KEY` and `NEWS_USER_KEY_PREFIX`. Refresh tokens must be encrypted with `AUTH_SECRET`.
 - Vercel Hobby Cron calls `/api/cron` once per day at 12:00 UTC. The Vercel Cron route sends when called and skips if an email was already sent on the same local date. The local background scheduler still checks the configured timezone and send time.
+- Scheduled email is opt-in per user through `dailySendingEnabled`; missing or false values must skip cron/local scheduled sending, while manual generation remains available.
 - The shared app logic remains in `server.js`. API route files should import and reuse `handleApi` instead of duplicating news generation code.
 - `vercel.json` must keep explicit builds and routes so Vercel serves `public/` as static files and `api/*.js` as serverless functions, instead of using the local `server.js` file as the production root entrypoint.
 - Topic search uses `focus` as the source of truth; `generatedKeywords` are suggestions only, and legacy `keywords` should seed `focus` for old saved topics.

@@ -27,6 +27,7 @@ The daily digest feature creates the full news briefing for enabled categories. 
 8. The digest and email result are saved to that user's history.
 9. The API response returns the digest, HTML, text, and email result.
 10. Scheduled runs iterate OAuth-registered Gmail users and apply each user's schedule, authorization check, and duplicate-send guard.
+11. A scheduled run sends only when that user has explicitly enabled and saved `dailySendingEnabled`; manual runs are unaffected.
 
 ## Config and Environment
 
@@ -45,12 +46,14 @@ The daily digest feature creates the full news briefing for enabled categories. 
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `AUTH_SECRET`: required for strict Gmail OAuth login and sending.
 - `CRON_SECRET`: optional secret for `/api/cron`.
 - `sendTime`: saved local send time.
+- `dailySendingEnabled`: per-user opt-in for scheduled sending. It defaults to `false`, including for older saved configs without this field.
 - `timezone`: saved timezone, defaulting to `America/New_York`.
 - `vercel.json`: Vercel Hobby Cron calls `/api/cron` once per day at 12:00 UTC.
 
 ## Edge Cases
 
 - The scheduled route skips sending for a user if an email was already sent on the same local date.
+- The scheduled route skips users who have not explicitly enabled daily sending. Signing in alone does not opt a user in.
 - Vercel Cron does not require the configured local send hour because Hobby Cron is daily and UTC-based.
 - The local scheduler only sends for users whose configured local time exactly matches the current minute.
 - If there are no registered OAuth users yet, scheduled runs do not send.
@@ -67,4 +70,6 @@ The daily digest feature creates the full news briefing for enabled categories. 
 - Test two different users to confirm config and history are separate.
 - Test duplicate prevention by placing prior digest entries in history and confirming selected articles are not reused.
 - Test scheduled behavior by checking `/api/cron` with and without `CRON_SECRET`.
+- Test that missing, false, and malformed `dailySendingEnabled` values skip scheduled sending, while strict boolean `true` allows it.
+- Test that manual `/api/run` behavior is unchanged when daily sending is off.
 - A future test harness should mock article fetching, summarization, and email sending so the digest can run without real APIs.

@@ -7,6 +7,7 @@ const disconnectGoogle = document.querySelector("#disconnectGoogle");
 const form = document.querySelector("#settingsForm");
 const senderEmail = document.querySelector("#senderEmail");
 const recipientEmail = document.querySelector("#recipientEmail");
+const dailySendingEnabled = document.querySelector("#dailySendingEnabled");
 const sendTime = document.querySelector("#sendTime");
 const categories = document.querySelector("#categories");
 const addCategory = document.querySelector("#addCategory");
@@ -315,6 +316,7 @@ function readFormState() {
     ...state,
     senderEmail: userEmail,
     recipientEmail: userEmail,
+    dailySendingEnabled: dailySendingEnabled.checked,
     sendTime: sendTime.value || "08:00",
     categories: [...categories.querySelectorAll(".category-card")].map((node) => {
       const previous = state.categories.find((item) => item.id === node.dataset.id) || {};
@@ -684,6 +686,7 @@ async function init() {
   state = await api("/api/config");
   senderEmail.value = userEmail;
   recipientEmail.value = userEmail;
+  dailySendingEnabled.checked = state.dailySendingEnabled === true;
   sendTime.value = state.sendTime || "08:00";
   renderCategories();
   if (session.needsReconnect) {

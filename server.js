@@ -194,6 +194,7 @@ function loadLocalEnv(filePath) {
 const defaultConfig = {
   senderEmail: "lilianhe347208@gmail.com",
   recipientEmail: "zh2652@barnard.edu",
+  dailySendingEnabled: false,
   sendTime: "08:00",
   timezone: "America/New_York",
   categories: [
@@ -430,6 +431,7 @@ function normalizeConfig(saved) {
   return {
     ...defaultConfig,
     ...saved,
+    dailySendingEnabled: saved.dailySendingEnabled === true,
     categories
   };
 }
@@ -2395,6 +2397,15 @@ function generatedOnDateInZone(digest, timezone, dateKey) {
 
 async function runScheduledDigestForUser(userEmail, { requireSendHour = true } = {}) {
   const config = await readUserConfig(userEmail);
+
+  if (!config.dailySendingEnabled) {
+    return {
+      userEmail,
+      ran: false,
+      message: "Skipped. Daily sending is not enabled for this account."
+    };
+  }
+
   const timezone = config.timezone || "America/New_York";
   const sendTime = String(config.sendTime || "08:00").slice(0, 5);
   const currentTime = currentTimeInZone(timezone);
