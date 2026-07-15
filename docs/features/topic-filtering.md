@@ -7,6 +7,7 @@ Topic filtering decides which categories run, how many items each category needs
 ## Related Files
 
 - `server.js`: category defaults, `normalizeCategory`, `clampItemCount`, freshness checks, dedupe helpers, recent-history memory, scoring, ranking, and selection.
+- `api/keywords.js`: Vercel serverless entrypoint for generated keyword suggestions.
 - `public/app.js`: reads category names, enabled state, item counts, focus text, and generated keyword suggestions from the settings form.
 - `public/index.html`: contains the topic controls, including the simple Focus field and advanced keyword suggestion controls.
 - `data/config.json`: local saved categories and topic settings.
@@ -64,3 +65,4 @@ Topic filtering decides which categories run, how many items each category needs
 - Test selecting multiple generated keyword suggestions, deselecting one, and adding the selected set to Focus.
 - Test that generated keyword suggestions not added to Focus are not used for search.
 - Test editing Focus manually and confirming the digest uses Focus terms.
+- On Vercel, test that `POST /api/keywords` reaches the shared handler instead of returning 404.
