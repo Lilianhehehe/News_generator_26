@@ -20,14 +20,15 @@ The daily digest feature creates the full news briefing for enabled categories. 
 1. The UI posts to `/api/run` with a signed session cookie, Vercel Cron calls `/api/cron`, or the local scheduler calls `runScheduledDigest`.
 2. For manual runs, the app reads the verified Gmail user's saved config and recent history.
 3. Enabled categories are processed one by one.
-4. Candidate articles are fetched, filtered, ranked, and selected.
-5. Selected articles are passed to the summarization step.
-6. Validated summaries are formatted as HTML and plain text.
-7. Gmail API sending runs only when requested, Google authorization is valid, and summarization succeeded.
-8. The digest and email result are saved to that user's history.
-9. The API response returns the digest, HTML, text, and email result.
-10. Scheduled runs iterate OAuth-registered Gmail users and apply each user's schedule, authorization check, and duplicate-send guard.
-11. A scheduled run sends only when that user has explicitly enabled and saved `dailySendingEnabled`; manual runs are unaffected.
+4. Candidate articles are fetched, filtered, and ranked.
+5. Publisher pages are checked for free access, paywall signals, and enough readable article text; only verified candidates are selected.
+6. Selected articles and their temporary extracted evidence text are passed to the summarization step.
+7. Validated summaries are formatted as HTML and plain text.
+8. Gmail API sending runs only when requested, Google authorization is valid, and summarization succeeded.
+9. The digest and email result are saved to that user's history without the temporary article text.
+10. The API response returns the digest, HTML, text, and email result.
+11. Scheduled runs iterate OAuth-registered Gmail users and apply each user's schedule, authorization check, and duplicate-send guard.
+12. A scheduled run sends only when that user has explicitly enabled and saved `dailySendingEnabled`; manual runs are unaffected.
 
 ## Config and Environment
 
@@ -59,6 +60,7 @@ The daily digest feature creates the full news briefing for enabled categories. 
 - If there are no registered OAuth users yet, scheduled runs do not send.
 - If a user's Google authorization is missing or revoked, scheduled runs skip that user and keep going.
 - If no articles are selected for a category, the category gets an error message instead of filler news.
+- If no candidate can be verified as freely readable with enough text, the category stays empty instead of using a paid or partial article.
 - If summarization fails, the app hides short fallback summaries and does not send an email.
 - History is capped to the most recent 20 digest records.
 
@@ -69,6 +71,7 @@ The daily digest feature creates the full news briefing for enabled categories. 
 - Test `/api/run` while signed out and confirm it returns 401.
 - Test two different users to confirm config and history are separate.
 - Test duplicate prevention by placing prior digest entries in history and confirming selected articles are not reused.
+- Test that a paid or partial article is skipped and the next freely readable ranked candidate is selected.
 - Test scheduled behavior by checking `/api/cron` with and without `CRON_SECRET`.
 - Test that missing, false, and malformed `dailySendingEnabled` values skip scheduled sending, while strict boolean `true` allows it.
 - Test that manual `/api/run` behavior is unchanged when daily sending is off.

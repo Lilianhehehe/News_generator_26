@@ -35,9 +35,13 @@ const ANTHROPIC_MAX_OUTPUT_TOKENS = Number(process.env.ANTHROPIC_MAX_OUTPUT_TOKE
 const NEWS_MAX_AGE_DAYS = 10;
 const NEWS_MAX_AGE_MS = NEWS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 const NEWS_FEED_TIMEOUT_MS = Number(process.env.NEWS_FEED_TIMEOUT_MS || 20_000);
+const NEWS_ARTICLE_TIMEOUT_MS = Number(process.env.NEWS_ARTICLE_TIMEOUT_MS || 20_000);
+const NEWS_MIN_ARTICLE_WORDS = Number(process.env.NEWS_MIN_ARTICLE_WORDS || 250);
+const NEWS_MAX_ARTICLE_CHARS = Number(process.env.NEWS_MAX_ARTICLE_CHARS || 6_500);
+const NEWS_ARTICLE_CHECK_CONCURRENCY = 4;
 const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
 const FALLBACK_FEED_SOURCE_PRIORITY = 3;
-const APP_VERSION = "news-generator-2026-06-07-repeat-guard-v2";
+const APP_VERSION = "news-generator-2026-07-15-general-sources-v3";
 const REDIS_CONFIG_KEY = process.env.NEWS_CONFIG_KEY || "news-generator:config";
 const REDIS_HISTORY_KEY = process.env.NEWS_HISTORY_KEY || "news-generator:history";
 const REDIS_USERS_KEY = process.env.NEWS_USERS_KEY || "news-generator:users";
@@ -98,7 +102,8 @@ const NEWS_STYLE_PROMPT = [
   "- Do not mention the source name or publication time inside the summary.",
   "",
   "Topic-specific detail rules:",
-  "- For business, finance, or economy news, focus on company names, product names, market changes, numbers or prices, policy details, business impact, and examples mentioned in the article.",
+  "- For business, finance, or economy news, include concrete details supported by the article, such as company and product names, market changes, numbers or prices, policy details, and business impact.",
+  "- For layoffs, explain how many jobs are affected, when the cuts happen, which teams, locations, or workers are affected, the reason given, and the concrete impact on employees or the business whenever the article provides those details.",
   "- For biology, neuroscience, medicine, or research news, focus on the study question, what researchers found, what is new or innovative, why the finding matters, possible future uses, how it may help future research, and limits or open questions mentioned in the article.",
   "- For policy, law, or politics news, focus on what policy, law, or decision changed, who is affected, what may happen next, why the change matters, and what conflict or debate is involved.",
   "- For technology news, focus on what the technology does, what problem it tries to solve, what is new about it, who may use it, and what limits, risks, or open questions remain.",
@@ -106,6 +111,8 @@ const NEWS_STYLE_PROMPT = [
   "",
   "Evidence rules:",
   "- Use only information supported by the article data.",
+  "- Every number, date, amount, percentage, timeline, and cause-and-effect claim must be directly supported by the article data.",
+  "- If the article does not provide a number, date, reason, or impact, skip that detail. Do not estimate it, infer it, or fill it in.",
   "- Do not invent company names, research results, numbers, prices, future uses, political effects, quotes, examples, reactions, causes, or background context.",
   "- If a detail is not in the article data, skip that detail.",
   "- Do not write missing-detail disclaimers such as 'The article does not give specific company names.'",
@@ -174,6 +181,30 @@ const fallbackRssFeedsByCategory = {
     { name: "Yahoo Finance", url: "https://finance.yahoo.com/news/rssindex", priority: 3 }
   ]
 };
+
+const subscriptionOnlyNewsHosts = [
+  "barrons.com",
+  "bloomberg.com",
+  "businessinsider.com",
+  "economist.com",
+  "ft.com",
+  "foreignpolicy.com",
+  "fortune.com",
+  "hbr.org",
+  "latimes.com",
+  "marketwatch.com",
+  "newyorker.com",
+  "nytimes.com",
+  "scientificamerican.com",
+  "statnews.com",
+  "telegraph.co.uk",
+  "theatlantic.com",
+  "thetimes.co.uk",
+  "technologyreview.com",
+  "washingtonpost.com",
+  "wired.com",
+  "wsj.com"
+];
 
 function loadLocalEnv(filePath) {
   if (!existsSync(filePath)) return;
@@ -1066,7 +1097,9 @@ function decodeXml(value = "") {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, "\"")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#39;/g, "'");
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)));
 }
 
 function getTagRaw(item, tag) {
@@ -1154,6 +1187,330 @@ function isFreshArticle(article, now = Date.now()) {
   const publishedTime = getArticlePublishedTime(article);
   if (publishedTime === null) return false;
   return publishedTime <= now && now - publishedTime <= NEWS_MAX_AGE_MS;
+}
+
+function getUrlHostname(value = "") {
+  try {
+    return new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function isSubscriptionOnlyHost(value = "") {
+  const hostname = getUrlHostname(value);
+  return subscriptionOnlyNewsHosts.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+}
+
+function htmlFragmentToText(value = "") {
+  return decodeXml(String(value))
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<br\b[^>]*>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6]|section)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function countArticleWords(value = "") {
+  return (String(value).match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) || []).length;
+}
+
+function hasPaywallSignals(html = "") {
+  if (/"isAccessibleForFree"\s*:\s*(?:false|"false")/i.test(html)) return true;
+  const hasPaywallMarkup = /\b(?:id|class|data-testid)=["'][^"']*(?:paywall|metered[-_ ]content|subscriber[-_ ]content|premium[-_ ]content)[^"']*["']/i.test(html);
+  const visibleText = htmlFragmentToText(
+    String(html)
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+  );
+  const hasStrongReadingGate = /\b(?:subscribe(?:\s+now)?\s+to\s+(?:continue|keep)\s+reading|continue\s+reading\s+with\s+a\s+subscription|(?:sign|log)\s+in\s+to\s+(?:continue|keep)\s+reading|register\s+to\s+(?:continue|keep)\s+reading|unlock\s+(?:this|the)\s+(?:article|story)|(?:this|the)\s+(?:article|story|content)\s+is\s+(?:only\s+)?(?:available\s+)?(?:to|for)\s+subscribers|subscriber[ -]only|to\s+read\s+(?:the\s+rest|this\s+article|the\s+full\s+article)|you\s+have\s+\d+\s+(?:free\s+)?articles?\s+(?:left|remaining))\b/i.test(visibleText);
+  return hasStrongReadingGate || (hasPaywallMarkup && /\b(?:subscribe|subscription|subscriber|unlock)\b/i.test(visibleText));
+}
+
+function getVisiblePageText(html = "") {
+  return htmlFragmentToText(
+    String(html)
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+  );
+}
+
+function hasNonArticleGateSignals(html = "") {
+  const visibleText = getVisiblePageText(html);
+  const investorTypeGate = /\bselect\s+your\s+investor\s+type\b/i.test(visibleText)
+    || (
+      /\binstitutional\s+investor\b/i.test(visibleText)
+      && /\bindividual\s+investor\b/i.test(visibleText)
+      && /\bfinancial\s+intermediar(?:y|ies)\b/i.test(visibleText)
+    );
+  const accessOrDownloadGate = /\b(?:choose|select)\s+your\s+(?:location|country|region|investor\s+type)\b|\brequest\s+(?:article\s+)?access\b|\bdownload\s+(?:the\s+)?(?:full\s+)?report\b|\bcomplete\s+the\s+form\s+to\s+(?:access|read|download)\b/i.test(visibleText);
+  return investorTypeGate || accessOrDownloadGate;
+}
+
+function isArticleSchemaType(value) {
+  const types = Array.isArray(value) ? value : [value];
+  return types.some((type) => /(?:^|\b)(?:article|newsarticle|analysisnewsarticle|reportagenewsarticle)$/i.test(String(type || "")));
+}
+
+function collectJsonLdArticleBodies(html = "") {
+  const bodies = [];
+  const scripts = [...String(html).matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (isArticleSchemaType(value["@type"]) && typeof value.articleBody === "string") {
+      bodies.push(htmlFragmentToText(value.articleBody));
+    }
+    Object.values(value).forEach(visit);
+  };
+
+  for (const [, attributes, rawJson] of scripts) {
+    if (!/\btype=["'][^"']*ld\+json/i.test(attributes)) continue;
+    try {
+      visit(JSON.parse(rawJson.trim()));
+    } catch {
+      // Invalid publisher metadata is ignored; visible article markup is checked next.
+    }
+  }
+  return bodies.filter(Boolean);
+}
+
+function countSubstantiveParagraphs(html = "") {
+  return [...String(html).matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((match) => htmlFragmentToText(match[1]))
+    .filter((text) => text.length >= 80)
+    .length;
+}
+
+function hasArticlePageSignals(html = "") {
+  if (collectJsonLdArticleBodies(html).length) return true;
+  if (/<article\b[^>]*>[\s\S]*?<\/article>/i.test(html)) return true;
+  const hasOpenGraphArticle = /<meta\b(?=[^>]*\bproperty=["']og:type["'])(?=[^>]*\bcontent=["']article["'])[^>]*>/i.test(html);
+  const mainBlocks = [...String(html).matchAll(/<main\b[^>]*>([\s\S]*?)<\/main>/gi)];
+  return hasOpenGraphArticle && mainBlocks.some((match) => countSubstantiveParagraphs(match[1]) >= 3);
+}
+
+const BUSINESS_EVENT_PATTERN = /\b(?:(?:will|to|plans?\s+to|agreed\s+to)\s+(?:invest|fund)|announc(?:e|ed|es|ing)|acquir(?:e|ed|es|ing)|buy|bought|sell|sold|merg(?:e|ed|er|es|ing)|layoffs?|laid\s+off|cut(?:s|ting)?|hire[ds]?|hiring|invest(?:s|ed|ing)|fund(?:ed|ing)|launch(?:es|ed|ing)?|expand(?:s|ed|ing)?|clos(?:e|ed|es|ing)|open(?:s|ed|ing)?|report(?:s|ed|ing)|file[ds]?|approve[ds]?|reject(?:s|ed)?|raise[ds]?|lower(?:s|ed)?|increase[ds]?|decrease[ds]?|rise[sn]?|rose|fall(?:s|ing)?|fell|gain(?:s|ed)?|drop(?:s|ped)?|declin(?:e|ed|es|ing)|resign(?:s|ed|ing)?|appoint(?:s|ed|ing)?|recall(?:s|ed|ing)?|default(?:s|ed|ing)?|bankrupt(?:cy)?|restructur(?:e|ed|es|ing))\b/i;
+
+function getBusinessEvidenceScore(value = "") {
+  const text = String(value);
+  let score = 0;
+  if (BUSINESS_EVENT_PATTERN.test(text)) score += 2;
+  if (/(?:[$€£¥]\s?\d|\bUSD\s?\d|\b\d[\d,.]*\s?(?:dollars?|euros?|pounds?|yuan)\b)/i.test(text)) score += 2;
+  if (/\b\d+(?:\.\d+)?\s?(?:%|percent|percentage points?)\b/i.test(text)) score += 2;
+  if (/\b\d[\d,]*(?:\.\d+)?\s+(?:jobs?|employees?|workers?|roles?|stores?|offices?|factories|plants?|customers?|users?|shares?|units?)\b/i.test(text)) score += 2;
+  if (/\b(?:Q[1-4]|first|second|third|fourth)\s+(?:quarter|half)|\bfiscal\s+(?:year|quarter)|\bquarterly\b/i.test(text)) score += 1;
+  if (/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:,\s+\d{4})?|\b(?:19|20)\d{2}\b/i.test(text)) score += 1;
+  if (/\b(?:revenue|profit|loss|earnings|costs?|charges?|forecast|guidance|valuation|market\s+share|interest\s+rate|workforce)\b/i.test(text)) score += 1;
+  if (/\b(?:because|after|due\s+to|as\s+a\s+result|will\s+affect|expects?\s+to|impact|response\s+times?|operations?)\b/i.test(text)) score += 1;
+  return score;
+}
+
+function hasConcreteBusinessEvidence(value = "") {
+  return BUSINESS_EVENT_PATTERN.test(String(value)) && getBusinessEvidenceScore(value) >= 3;
+}
+
+function extractReadableArticleText(html = "") {
+  const jsonLdBodies = collectJsonLdArticleBodies(html);
+  const cleanedHtml = String(html)
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(?:script|style|noscript|svg|form|nav|header|footer|aside)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|svg|form|nav|header|footer|aside)>/gi, " ");
+  const articleBlocks = [...cleanedHtml.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/gi)].map((match) => match[1]);
+  const mainBlocks = [...cleanedHtml.matchAll(/<main\b[^>]*>([\s\S]*?)<\/main>/gi)].map((match) => match[1]);
+  const hasOpenGraphArticle = /<meta\b(?=[^>]*\bproperty=["']og:type["'])(?=[^>]*\bcontent=["']article["'])[^>]*>/i.test(cleanedHtml);
+  const validMainBlocks = hasOpenGraphArticle
+    ? mainBlocks.filter((block) => countSubstantiveParagraphs(block) >= 3)
+    : [];
+  const contentBlocks = articleBlocks.length ? articleBlocks : validMainBlocks;
+  const markupCandidates = contentBlocks.map((block) => {
+    const paragraphs = [];
+    const seen = new Set();
+    const matches = [...block.matchAll(/<(?:p|li)\b[^>]*>([\s\S]*?)<\/(?:p|li)>/gi)];
+    for (const [, fragment] of matches) {
+      const text = htmlFragmentToText(fragment);
+      const key = text.toLowerCase();
+      if (
+        text.length < 40 ||
+        seen.has(key) ||
+        /^(?:advertisement|sign up|subscribe|read more|related articles?|copyright|all rights reserved)\b/i.test(text)
+      ) continue;
+      seen.add(key);
+      paragraphs.push(text);
+    }
+    return paragraphs.join("\n\n");
+  });
+
+  const candidates = [...jsonLdBodies, ...markupCandidates].filter(Boolean);
+  return candidates.sort((a, b) => countArticleWords(b) - countArticleWords(a))[0] || "";
+}
+
+function getCanonicalArticleUrl(html = "", fallbackUrl = "") {
+  const links = [...String(html).matchAll(/<link\b([^>]*)>/gi)];
+  for (const [, attributes] of links) {
+    if (!/\brel=["'][^"']*canonical/i.test(attributes)) continue;
+    const href = attributes.match(/\bhref=["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    try {
+      return new URL(decodeXml(href), fallbackUrl).toString();
+    } catch {
+      return fallbackUrl;
+    }
+  }
+  return fallbackUrl;
+}
+
+async function resolveGoogleNewsPublisherUrl(googleNewsUrl, html) {
+  const articleId = new URL(googleNewsUrl).pathname.split("/").filter(Boolean).pop();
+  const timestamp = String(html).match(/\bdata-n-a-ts=["']([^"']+)["']/i)?.[1];
+  const signature = String(html).match(/\bdata-n-a-sg=["']([^"']+)["']/i)?.[1];
+  if (!articleId || !timestamp || !signature) {
+    throw new Error("Google News publisher link parameters were missing");
+  }
+
+  const requestPayload = [
+    "Fbv4je",
+    JSON.stringify([
+      "garturlreq",
+      [
+        ["X", "X", ["X", "X"], null, null, 1, 1, "US:en", null, 1, null, null, null, null, null, 0, 1],
+        "X",
+        "X",
+        1,
+        [1, 1, 1],
+        1,
+        1,
+        null,
+        0,
+        0,
+        null,
+        0
+      ],
+      articleId,
+      Number(timestamp),
+      signature
+    ])
+  ];
+  const { controller, timer } = withTimeout(NEWS_ARTICLE_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://news.google.com/_/DotsSplashUi/data/batchexecute", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "referer": "https://news.google.com/",
+        "user-agent": "Mozilla/5.0 (compatible; PersonalNewsGenerator/0.2; +https://example.com/news-reader)"
+      },
+      body: new URLSearchParams({ "f.req": JSON.stringify([[requestPayload]]) })
+    });
+    if (!response.ok) throw new Error(`Google News publisher lookup returned ${response.status}`);
+    const responseText = await response.text();
+    const jsonStart = responseText.indexOf("[[");
+    if (jsonStart === -1) throw new Error("Google News publisher lookup returned no data");
+    const rows = JSON.parse(responseText.slice(jsonStart).trim());
+    const resultRow = rows.find((row) => row?.[0] === "wrb.fr" && row?.[1] === "Fbv4je");
+    const publisherUrl = resultRow?.[2] ? JSON.parse(resultRow[2])?.[1] : "";
+    if (!/^https?:\/\//i.test(publisherUrl) || getUrlHostname(publisherUrl).endsWith("google.com")) {
+      throw new Error("Google News publisher link could not be resolved");
+    }
+    return publisherUrl;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchArticlePage(url) {
+  const { controller, timer } = withTimeout(NEWS_ARTICLE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "accept": "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 (compatible; PersonalNewsGenerator/0.2; +https://example.com/news-reader)"
+      }
+    });
+    if (!response.ok) throw new Error(`article returned ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+      throw new Error("article did not return an HTML page");
+    }
+    return { html: await response.text(), url: response.url || url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function inspectFreeReadableArticle(article, { companyFocused = false } = {}) {
+  if (isSubscriptionOnlyHost(article.link)) {
+    return { ok: false, reason: "known subscription-only source" };
+  }
+
+  try {
+    let page = await fetchArticlePage(article.link);
+    let canonicalUrl = getCanonicalArticleUrl(page.html, page.url);
+    if (getUrlHostname(page.url) === "news.google.com") {
+      const publisherUrl = getUrlHostname(canonicalUrl) !== "news.google.com"
+        ? canonicalUrl
+        : await resolveGoogleNewsPublisherUrl(article.link, page.html);
+      page = await fetchArticlePage(publisherUrl);
+      canonicalUrl = getCanonicalArticleUrl(page.html, page.url);
+    }
+
+    const finalUrl = canonicalUrl || page.url;
+    if (getUrlHostname(finalUrl) === "news.google.com") {
+      return { ok: false, reason: "publisher page could not be resolved" };
+    }
+    if (isSubscriptionOnlyHost(finalUrl) || isSubscriptionOnlyHost(page.url)) {
+      return { ok: false, reason: "known subscription-only source" };
+    }
+    if (hasNonArticleGateSignals(page.html)) {
+      return { ok: false, reason: "page is an access gate or non-article landing page" };
+    }
+    if (hasPaywallSignals(page.html)) {
+      return { ok: false, reason: "page shows a paywall or reading gate" };
+    }
+    if (!hasArticlePageSignals(page.html)) {
+      return { ok: false, reason: "page does not expose a verifiable article body" };
+    }
+
+    const readableText = extractReadableArticleText(page.html);
+    const wordCount = countArticleWords(readableText);
+    if (wordCount < NEWS_MIN_ARTICLE_WORDS) {
+      return { ok: false, reason: `only ${wordCount} readable words were available` };
+    }
+
+    const businessEvidenceScore = companyFocused
+      ? getBusinessEvidenceScore(`${article.title || ""} ${readableText}`)
+      : 0;
+    if (companyFocused && !hasConcreteBusinessEvidence(`${article.title || ""} ${readableText}`)) {
+      return { ok: false, reason: "article does not contain enough concrete business details" };
+    }
+
+    const evidenceText = readableText.length > NEWS_MAX_ARTICLE_CHARS
+      ? `${readableText.slice(0, NEWS_MAX_ARTICLE_CHARS).replace(/\s+\S*$/, "")}...`
+      : readableText;
+    return {
+      ok: true,
+      article: {
+        ...article,
+        link: finalUrl,
+        originalUrl: article.originalUrl || article.link,
+        articleText: evidenceText,
+        accessVerified: true,
+        businessEvidenceScore
+      }
+    };
+  } catch (error) {
+    return { ok: false, reason: error.message || "article page could not be checked" };
+  }
 }
 
 async function searchGoogleNews(query, limit) {
@@ -1258,7 +1615,7 @@ function getSourcePriorityScore(article) {
   return Number.isFinite(priority) ? priority : 0;
 }
 
-function rankArticlesForCategory(articles, category, limit) {
+function getRankedArticleCandidates(articles, category, requiredCount) {
   const ranked = dedupeArticles(articles)
     .map((article, index) => {
       const relevanceScore = scoreArticle(article, category);
@@ -1273,10 +1630,10 @@ function rankArticlesForCategory(articles, category, limit) {
 
   if (category.researchFocused || category.companyFocused) {
     const focused = ranked.filter((item) => item.relevanceScore > 0).map((item) => item.article);
-    if (focused.length >= limit) return focused.slice(0, limit);
+    if (focused.length >= requiredCount) return focused;
   }
 
-  return ranked.map((item) => item.article).slice(0, limit);
+  return ranked.map((item) => item.article);
 }
 
 function getFocusSearchKeywords(focus = "") {
@@ -1420,9 +1777,92 @@ function filterFreshUnusedArticles(articles, recentMemory, currentRunMemory) {
   );
 }
 
-function selectUniqueArticlesForCategory(articles, category, itemCount, recentMemory, currentRunMemory) {
+async function selectFreeReadableArticlesForCategory(
+  articles,
+  category,
+  itemCount,
+  recentMemory,
+  currentRunMemory,
+  accessCheckCache
+) {
   const candidates = filterFreshUnusedArticles(dedupeArticles(articles), recentMemory, currentRunMemory);
-  return rankArticlesForCategory(candidates, category, itemCount);
+  const ranked = getRankedArticleCandidates(candidates, category, itemCount);
+  const selected = [];
+
+  for (let index = 0; index < ranked.length && selected.length < itemCount; index += NEWS_ARTICLE_CHECK_CONCURRENCY) {
+    const batch = ranked.slice(index, index + NEWS_ARTICLE_CHECK_CONCURRENCY);
+    const checks = await Promise.all(batch.map(async (article) => {
+      const cacheKey = `${getArticleLinkKey(article)}|company:${Boolean(category.companyFocused)}`;
+      if (!accessCheckCache.has(cacheKey)) {
+        accessCheckCache.set(cacheKey, inspectFreeReadableArticle(article, {
+          companyFocused: Boolean(category.companyFocused)
+        }));
+      }
+      return { article, result: await accessCheckCache.get(cacheKey) };
+    }));
+
+    const orderedChecks = category.companyFocused
+      ? [...checks].sort((a, b) =>
+        Number(b.result.article?.businessEvidenceScore || 0) - Number(a.result.article?.businessEvidenceScore || 0)
+      )
+      : checks;
+    for (const { article, result } of orderedChecks) {
+      if (result.ok && selected.length < itemCount) {
+        selected.push(result.article);
+      } else if (!result.ok) {
+        console.info(`Skipped article without verified free full text: ${article.title} (${result.reason})`);
+      }
+    }
+  }
+
+  return selected;
+}
+
+async function findArticlesForCategory(category, options = {}) {
+  const itemCount = clampItemCount(options.itemCount ?? category.itemCount ?? 1);
+  const searchLimit = options.searchLimit ?? Math.min(Math.max(itemCount * 20, 20), 50);
+  const recentMemory = options.recentMemory || createArticleMemory();
+  const currentRunMemory = options.currentRunMemory || createArticleMemory();
+  const selectionMemory = {
+    links: new Set(currentRunMemory.links || []),
+    titles: new Set(currentRunMemory.titles || [])
+  };
+  const accessCheckCache = options.accessCheckCache || new Map();
+  const searchGoogleNewsFn = options.searchGoogleNewsFn || searchGoogleNews;
+  const searchFallbackFeedsFn = options.searchFallbackFeedsFn || searchFallbackFeeds;
+  const selectArticlesFn = options.selectArticlesFn || selectFreeReadableArticlesForCategory;
+  const query = buildSearchQuery(category);
+  const selected = [];
+
+  const selectFrom = async (candidates) => {
+    if (!candidates.length || selected.length >= itemCount) return;
+    const additions = await selectArticlesFn(
+      candidates,
+      category,
+      itemCount - selected.length,
+      recentMemory,
+      selectionMemory,
+      accessCheckCache
+    );
+    for (const article of additions) {
+      selected.push(article);
+      addArticleToMemory(selectionMemory, article);
+    }
+  };
+
+  if (selected.length < itemCount) {
+    try {
+      await selectFrom(await searchGoogleNewsFn(query, searchLimit));
+    } catch (error) {
+      console.error(`Google News search failed for ${category.id}:`, error.message || error);
+    }
+  }
+
+  if (selected.length < itemCount) {
+    await selectFrom(await searchFallbackFeedsFn(category, searchLimit));
+  }
+
+  return selected;
 }
 
 function getCategoryDisplayName(category) {
@@ -1492,7 +1932,7 @@ function getGeneratedArticleIssues(article) {
   if (containsChineseText(title) || containsChineseText(summary)) {
     issues.push("contains Chinese text");
   }
-  if (wordCount < 60) {
+  if (wordCount < 70) {
     issues.push(`summary has ${wordCount} words; it must be more detailed and usually about 90-130 simple English words when the article data supports it`);
   }
   if (wordCount > 160) {
@@ -1542,6 +1982,11 @@ function finalizeBriefingCategories(digest, generatedArticles = []) {
   for (const category of digest.categories) {
     const finalArticles = [];
     for (const article of category.articles) {
+      const {
+        articleText: _articleText,
+        businessEvidenceScore: _businessEvidenceScore,
+        ...publicArticle
+      } = article;
       const generated = generatedByKey.get(`${category.id}|${article.link}`);
       const englishTitle = normalizeEnglishTitle(generated?.englishTitle) || fallbackEnglishTitle(article);
       const englishSummary = normalizeEnglishSummary(generated?.englishSummary);
@@ -1562,7 +2007,7 @@ function finalizeBriefingCategories(digest, generatedArticles = []) {
       }
 
       finalArticles.push({
-        ...article,
+        ...publicArticle,
         originalTitle: article.title,
         title: englishTitle,
         summary
@@ -1956,6 +2401,7 @@ async function createEnglishBriefings(digest) {
       source: article.source,
       publishedAt: article.publishedAt,
       snippet: article.snippet,
+      articleText: article.articleText,
       link: article.link
     }))
   );
@@ -2011,7 +2457,8 @@ async function createEnglishBriefings(digest) {
                     "The summary should explain as many of these points as the article data supports: what happened; who or what is involved; what method, decision, event, or system is involved; what the key finding, result, or change is; why it matters; and what it may affect, help with, or lead to next.",
                     "Do not add a point if the article data does not support it.",
                     "Do not use labels or bullet points.",
-                    "Use only the title, source, date, and snippet below as evidence.",
+                    "Use only the title, source, date, snippet, and verified freely readable article text below as evidence.",
+                    "Give the verified article text more weight than the short RSS snippet.",
                     "Do not add facts, examples, future steps, reactions, or background context unless they are directly supported by that evidence.",
                     "If a type of detail is missing, skip it and use other useful details that are supported.",
                     "Do not write disclaimers about missing company names, numbers, prices, examples, or data.",
@@ -2115,6 +2562,7 @@ async function generateDigest(config, history = []) {
   const enabledCategories = config.categories.filter((category) => category.enabled);
   const recentMemory = buildRecentArticleMemory(history);
   const currentRunMemory = createArticleMemory();
+  const accessCheckCache = new Map();
   const digest = {
     generatedAt: new Date().toISOString(),
     briefingResult: { enhanced: false, message: "English rewrite has not run yet." },
@@ -2125,35 +2573,15 @@ async function generateDigest(config, history = []) {
     const searchCategory = await prepareCategoryForSearch(category);
     const activeKeywords = getCategorySearchKeywords(searchCategory);
     const itemCount = clampItemCount(searchCategory.itemCount || config.maxItemsPerCategory || 1);
-    const query = buildSearchQuery(searchCategory);
     const searchLimit = Math.min(Math.max(itemCount * 20, 20), 50);
     try {
-      const candidateArticles = [];
-
-      try {
-        candidateArticles.push(...await searchGoogleNews(query, searchLimit));
-      } catch (error) {
-        console.error(`Google News search failed for ${category.id}:`, error.message || error);
-      }
-
-      let articles = selectUniqueArticlesForCategory(
-        candidateArticles,
-        searchCategory,
+      const articles = await findArticlesForCategory(searchCategory, {
         itemCount,
+        searchLimit,
         recentMemory,
-        currentRunMemory
-      );
-
-      if (articles.length < itemCount) {
-        candidateArticles.push(...await searchFallbackFeeds(searchCategory, searchLimit));
-        articles = selectUniqueArticlesForCategory(
-          candidateArticles,
-          searchCategory,
-          itemCount,
-          recentMemory,
-          currentRunMemory
-        );
-      }
+        currentRunMemory,
+        accessCheckCache
+      });
 
       for (const article of articles) {
         addArticleToMemory(currentRunMemory, article);
@@ -2174,7 +2602,7 @@ async function generateDigest(config, history = []) {
         })),
         error: articles.length
           ? undefined
-          : "No new non-repeated articles were found for this category today."
+          : "No new non-repeated articles with verified free full text were found for this category today."
       });
     } catch (error) {
       digest.categories.push({
@@ -2186,7 +2614,7 @@ async function generateDigest(config, history = []) {
         companyFocused: Boolean(searchCategory.companyFocused),
         politicalFocused: Boolean(searchCategory.politicalFocused),
         articles: [],
-        error: error.message || "No new non-repeated articles were found for this category today."
+        error: error.message || "No new non-repeated articles with verified free full text were found for this category today."
       });
     }
   }
@@ -2588,7 +3016,21 @@ async function handleApi(req, res) {
   sendJson(res, 404, { error: "Not found" });
 }
 
-export { handleApi, runDigest, runScheduledDigest, convertSummaryToBullets, translateToChinese, finalizeBriefingCategories };
+export {
+  handleApi,
+  runDigest,
+  runScheduledDigest,
+  convertSummaryToBullets,
+  translateToChinese,
+  finalizeBriefingCategories,
+  findArticlesForCategory,
+  extractReadableArticleText,
+  getBusinessEvidenceScore,
+  hasPaywallSignals,
+  inspectFreeReadableArticle,
+  isSubscriptionOnlyHost,
+  selectFreeReadableArticlesForCategory
+};
 
 if (IS_DIRECT_RUN) {
   await ensureDataFiles();

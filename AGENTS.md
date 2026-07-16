@@ -6,6 +6,9 @@
 - Generated news should not repeat articles used in the last 10 days.
 - If Google News has too few non-repeated results, the app should expand to category-matched official RSS sources from other websites.
 - If no unique article is found after expanded search, the app should not repeat old news as filler.
+- Selected articles must have a publisher page with verified free readable text. Reject known subscription-first sources, paywalls, reading gates, and pages with too little readable content; do not use paid or partial articles as filler.
+- A valid result must expose one identifiable full article body. Reject investor-type selectors, report-download or marketing landing pages, general resource pages, and news listing pages; do not combine multiple short article cards into one apparent article.
+- Company-focused news must describe a concrete business event and include source-backed specifics such as counts, amounts, percentages, dates, quarters, affected workers or locations, financial measures, or stated impacts. Reject generic report descriptions and broad market commentary without concrete facts.
 - The server should log its app version, loaded `server.js` modified time, and process start time at startup so stale background processes are easy to detect.
 - The project supports Vercel deployment with serverless API routes in `api/` and cron configuration in `vercel.json`.
 - Local runs use `data/config.json` and `data/history.json`. Vercel runs should use Upstash Redis through `KV_REST_API_URL` and `KV_REST_API_TOKEN`; the app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
@@ -83,6 +86,8 @@ For business, finance, or economy news, focus on useful details such as:
 - policy details
 - business impact
 - examples mentioned in the article
+- for layoffs: the number of affected jobs, timing, affected teams or locations, the stated reason, and concrete employee or business impact when supported by the article
+- prioritize business and finance articles with richer verifiable facts over generic market commentary
 
 For biology, neuroscience, medicine, or research news, focus on useful details such as:
 
@@ -120,6 +125,7 @@ For international news, focus on useful details such as:
 
 - Do not invent facts that are not supported by the article.
 - Do not invent company names, research results, numbers, prices, future uses, political effects, quotes, or examples.
+- Every number, date, amount, percentage, timeline, and cause-and-effect claim must be directly supported by the article. If it is missing, skip it instead of estimating or inferring it.
 - If the article does not support a detail, skip that detail.
 - Use only the article data provided to the AI request as evidence.
 

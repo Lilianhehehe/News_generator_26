@@ -12,14 +12,17 @@ Summarization rewrites selected articles into simple English titles and detailed
 
 ## Data Flow
 
-1. Selected articles are flattened into model input with category id, category name, focus flags, title, source, date, snippet, and link.
-2. If `OPENAI_API_KEY` is missing, all category articles are hidden and a preview-only message is returned.
-3. The app sends the articles to the OpenAI Responses API with a strict JSON schema.
-4. The model returns `categoryId`, `link`, `englishTitle`, and `englishSummary` for each article.
-5. The app validates every expected generated article.
-6. If validation fails, the app asks the model to revise affected items and tries again.
-7. Only valid generated articles are shown.
-8. Invalid or missing generated articles are hidden.
+1. Only articles that passed the free full-text access check reach summarization.
+2. Selected articles are flattened into model input with category id, category name, focus flags, title, source, date, snippet, verified readable article text, and link.
+3. If `OPENAI_API_KEY` is missing, all category articles are hidden and a preview-only message is returned.
+4. The app sends the articles to the OpenAI Responses API with a strict JSON schema and tells the model to prefer the verified article text over the short RSS snippet.
+   Business summaries request concrete source-backed details. For layoffs, this includes the number of affected jobs, timing, affected teams or locations, stated reason, and concrete impact when the article provides them.
+5. The model returns `categoryId`, `link`, `englishTitle`, and `englishSummary` for each article.
+6. The app validates every expected generated article.
+7. If validation fails, the app asks the model to revise affected items and tries again.
+8. Only valid generated articles are shown.
+9. Temporary extracted article text is removed before the final digest is returned or saved.
+10. Invalid or missing generated articles are hidden.
 
 ## Config and Environment
 
@@ -43,6 +46,8 @@ Summarization rewrites selected articles into simple English titles and detailed
 - Missing titles or summaries are invalid.
 - Summaries that talk about the article, report, source, or publication time are invalid.
 - If a generated item fails validation after all attempts, it is hidden.
+- The model receives at most `NEWS_MAX_ARTICLE_CHARS` characters of extracted article text per selected item to control request size.
+- Numbers, dates, amounts, percentages, timelines, and cause-and-effect claims must be directly supported by the provided article evidence. Missing details must be skipped rather than estimated or inferred.
 
 ## Testing Notes
 
@@ -50,4 +55,6 @@ Summarization rewrites selected articles into simple English titles and detailed
 - Test response extraction for `output_text` and nested output content.
 - Test failure behavior when `OPENAI_API_KEY` is missing.
 - Test that invalid generated articles are hidden and category errors are set when no valid summary remains.
+- Test that verified article text is included in model evidence and preferred over the RSS snippet.
+- Test that temporary article text is removed from final article objects.
 - A future mock harness should inject model output so summarization can be tested without calling OpenAI.
