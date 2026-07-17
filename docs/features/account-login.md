@@ -9,7 +9,7 @@ Account login uses Google OAuth so a user must prove control of their Gmail addr
 - `server.js`: OAuth routes, signed session cookies, encrypted token storage, session-protected APIs, and user-scoped config/history.
 - `api/auth.js`: shared Vercel serverless entrypoint for all `/api/auth/*` routes.
 - `vercel.json`: routes `/api/auth/*` to `api/auth.js` before the general API-file route.
-- `public/index.html`: Google sign-in panel, current-user display, sign-out, and disconnect controls.
+- `public/index.html`: branded Google sign-in panel plus the signed-in sidebar account, sign-out, and disconnect controls.
 - `public/app.js`: loads the signed-in session, blocks the app while signed out, and no longer sends user email as trusted input.
 - `public/styles.css`: Google sign-in, auth error, and read-only Gmail field styles.
 - `docs/features/email-delivery.md`: explains Gmail API sending with the user's OAuth grant.
@@ -41,6 +41,7 @@ Account login uses Google OAuth so a user must prove control of their Gmail addr
 - If Gmail send permission is not granted, the app asks the user to reconnect Google.
 - If Google token refresh fails later, scheduled sending skips that user and marks reconnect needed.
 - Sender and recipient Gmail addresses are always the verified session email.
+- The signed-in account controls live in the desktop sidebar; the OAuth and session behavior is unchanged by sidebar collapse or page navigation.
 - User config/history can remain after disconnect, but scheduled sending stops until Google is connected again.
 
 ## Testing Notes

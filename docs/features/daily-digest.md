@@ -10,7 +10,8 @@ The daily digest feature creates the full news briefing for enabled categories. 
 - `api/run.js`: Vercel route wrapper for manual digest generation.
 - `api/cron.js`: Vercel route wrapper for scheduled digest generation.
 - `api/history.js`: Vercel route wrapper for reading saved digest history.
-- `public/app.js`: calls `/api/run`, saves config first, and renders the result preview for the signed-in Gmail user.
+- `public/app.js`: calls `/api/run`, saves config first, switches to the Preview page, and renders the result in the newspaper-style interface for the signed-in Gmail user.
+- `docs/features/web-interface.md`: documents the Settings/Preview shell and UI-only state.
 - `docs/features/account-login.md`: explains how Google OAuth scopes config, history, and Gmail authorization.
 - `vercel.json`: defines the `/api/cron` schedule.
 - `launchd/com.lisa.news-generator.plist`: starts the local server as a background service.
@@ -27,8 +28,9 @@ The daily digest feature creates the full news briefing for enabled categories. 
 8. Gmail API sending runs only when requested, Google authorization is valid, and summarization succeeded.
 9. The digest and email result are saved to that user's history without the temporary article text.
 10. The API response returns the digest, HTML, text, and email result.
-11. Scheduled runs iterate OAuth-registered Gmail users and apply each user's schedule, authorization check, and duplicate-send guard.
-12. A scheduled run sends only when that user has explicitly enabled and saved `dailySendingEnabled`; manual runs are unaffected.
+11. A manual UI run renders that response on the separate Preview page; this presentation step does not change the returned digest or email behavior.
+12. Scheduled runs iterate OAuth-registered Gmail users and apply each user's schedule, authorization check, and duplicate-send guard.
+13. A scheduled run sends only when that user has explicitly enabled and saved `dailySendingEnabled`; manual runs are unaffected.
 
 ## Config and Environment
 

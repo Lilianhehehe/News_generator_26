@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&amp;display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#FBFAF7; color:#20241F; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
+  a { color:#54634F; } a:hover { color:#20241F; }
+  input, textarea { outline:none; }
+  input:focus, textarea:focus { border-color:#9AA694 !important; }
+  ::placeholder { color:#B8B5AC; }
+</style>
+</helmet>
+
+<div style="display:flex; min-height:100vh; background:#FBFAF7; position:relative">
+
+  <!-- ===== Left rail ===== -->
+  <sc-if value="{{ sidebarOpen }}" hint-placeholder-val="{{ true }}">
+  <aside data-screen-label="Sidebar" style="width:236px; flex:none; display:flex; flex-direction:column; padding:44px 32px 36px; border-right:1px solid #ECEAE2; position:sticky; top:0; align-self:flex-start; height:100vh; box-sizing:border-box; overflow-y:auto">
+    <button onClick="{{ collapseSidebar }}" title="Collapse" style="position:absolute; top:14px; right:14px; width:18px; height:22px; border:none; background:transparent; color:#A6A399; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; line-height:1; padding:0" style-hover="color:#54634F"><span style="display:inline-block; transform:scaleY(1.9)">&lt;</span></button>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:14px; padding:8px 0 26px">
+      <svg width="52" height="30" viewBox="0 0 52 30" fill="none" stroke="#54634F" stroke-width="1.3" stroke-linecap="round">
+        <path d="M14 25 A12 12 0 0 1 38 25"></path>
+        <line x1="6" y1="25" x2="46" y2="25"></line>
+        <line x1="26" y1="0" x2="26" y2="8"></line>
+        <line x1="10" y1="6" x2="15.5" y2="12.5"></line>
+        <line x1="42" y1="6" x2="36.5" y2="12.5"></line>
+        <line x1="0.5" y1="16.5" x2="8.5" y2="19.5"></line>
+        <line x1="51.5" y1="16.5" x2="43.5" y2="19.5"></line>
+      </svg>
+      <div style="font-family:'Newsreader', Georgia, serif; font-size:19px; letter-spacing:0.28em; color:#20241F; white-space:nowrap">MORNING DESK</div>
+      <div style="font-size:9.5px; letter-spacing:0.32em; color:#A6A399">DAILY NEWS BRIEF</div>
+    </div>
+    <div style="height:1px; background:#ECEAE2; margin:0 -4px 34px"></div>
+
+    <nav style="display:flex; flex-direction:column; gap:0">
+      <div onClick="{{ goSettings }}" style="display:flex; align-items:center; gap:14px; cursor:pointer">
+        <div style="{{ nav1Circle }}">1</div>
+        <div style="{{ nav1Label }}">Send Settings</div>
+      </div>
+      <div style="width:1px; height:26px; background:#DEDCD2; margin-left:13px"></div>
+      <div onClick="{{ goPreview }}" style="display:flex; align-items:center; gap:14px; cursor:pointer">
+        <div style="{{ nav2Circle }}">2</div>
+        <div style="{{ nav2Label }}">Preview</div>
+      </div>
+    </nav>
+
+    <div style="flex:1"></div>
+
+    <div style="border-top:1px solid #ECEAE2; padding-top:22px; display:flex; flex-direction:column; gap:11px">
+      <div style="font-size:10px; letter-spacing:0.18em; text-transform:uppercase; color:#A6A399">Account</div>
+      <div style="display:flex; align-items:center; gap:8px">
+        <span style="flex:none; width:6px; height:6px; border-radius:50%; background:#54634F"></span>
+        <span style="font-size:12px; color:#54634F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ recipient }}</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:7px; margin-top:2px">
+        <span onClick="{{ disconnect }}" style="font-size:12px; color:#75736A; cursor:pointer; text-decoration:underline; text-decoration-color:#DEDCD2; text-underline-offset:3px; width:fit-content" style-hover="color:#20241F; text-decoration-color:#20241F">Disconnect Google</span>
+        <span onClick="{{ signOut }}" style="font-size:12px; color:#75736A; cursor:pointer; text-decoration:underline; text-decoration-color:#DEDCD2; text-underline-offset:3px; width:fit-content" style-hover="color:#8C4A3A; text-decoration-color:#8C4A3A">Sign out</span>
+      </div>
+    </div>
+    <div style="border-top:1px solid #ECEAE2; padding-top:20px; margin-top:20px; display:flex; flex-direction:column; gap:10px">
+      <div style="font-family:'Newsreader', Georgia, serif; font-style:italic; font-size:14.5px; color:#54634F">Simple. Local. Yours.</div>
+    </div>
+  </aside>
+  </sc-if>
+
+  <sc-if value="{{ sidebarCollapsed }}" hint-placeholder-val="{{ false }}">
+  <button onClick="{{ expandSidebar }}" title="Expand" style="position:absolute; top:14px; left:24px; width:18px; height:22px; border:none; background:transparent; color:#A6A399; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; line-height:1; padding:0; z-index:5" style-hover="color:#54634F"><span style="display:inline-block; transform:scaleY(1.9)">&gt;</span></button>
+  </sc-if>
+
+  <!-- ===== Main ===== -->
+  <main data-screen-label="Main" style="{{ mainStyle }}">
+
+    <!-- Header -->
+    <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:32px">
+      <div style="max-width:540px">
+        <h1 style="margin:0; font-family:'Newsreader', Georgia, serif; font-weight:400; font-size:44px; line-height:1.05; letter-spacing:-0.01em; color:#20241F">Daily News Brief</h1>
+        <div style="width:56px; height:1.5px; background:#20241F; margin:18px 0 22px"></div>
+        <p style="margin:0; font-size:14px; line-height:1.75; color:#75736A; text-wrap:pretty">Choose topics, keywords, and a send time. We’ll create a simple news brief and email it to you via Gmail.</p>
+      </div>
+      <sc-if value="{{ onSettings }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:none; margin-top:8px; display:flex; align-items:center; gap:16px">
+        <button onClick="{{ generate }}" style="display: flex; align-items: center; gap: 12px; padding: 14px 26px; color: #F7F5EE; border: none; cursor: pointer; font-family: 'Newsreader', Georgia, serif; font-size: 16.5px; letter-spacing: 0.02em; background-color: #344537" style-hover="background:#2C382E">
+          <span>{{ generateLabel }}</span>
+        </button>
+      </div>
+      </sc-if>
+    </header>
+
+    <!-- Pages -->
+    <div style="margin-top:44px; max-width:760px">
+
+      <!-- Send Settings card -->
+      <sc-if value="{{ onSettings }}" hint-placeholder-val="{{ true }}">
+      <section data-screen-label="Send Settings" style="background:#FFFFFF; border:1px solid #ECEAE2; padding:34px 34px 38px">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px">
+          <h2 style="margin:0; font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:24px; color:#20241F">Send Settings</h2>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:22px; margin-top:26px">
+          <label style="display:flex; flex-direction:column; gap:8px">
+            <span style="font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#A6A399">Sender Email</span>
+            <input value="{{ sender }}" onChange="{{ onSender }}" style="border:none; border-bottom:1px solid #DEDCD2; background:transparent; padding:6px 0 9px; font-family:'Newsreader', Georgia, serif; font-size:16.5px; color:#20241F">
+          </label>
+          <label style="display:flex; flex-direction:column; gap:8px">
+            <span style="font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#A6A399">Recipient Email</span>
+            <input value="{{ recipient }}" onChange="{{ onRecipient }}" style="border:none; border-bottom:1px solid #DEDCD2; background:transparent; padding:6px 0 9px; font-family:'Newsreader', Georgia, serif; font-size:16.5px; color:#20241F">
+          </label>
+          <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding-top:4px">
+            <div onClick="{{ onSendDaily }}" style="{{ sendDailyToggleStyle }}"><div style="{{ sendDailyKnobStyle }}"></div></div>
+            <div style="flex:1; min-width:120px">
+              <div style="font-family:'Newsreader', Georgia, serif; font-size:17px; color:#20241F">Send Every Day</div>
+            </div>
+            <label style="display:flex; flex-direction:column; gap:6px; flex:none">
+              <span style="font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:#A6A399">Send Time</span>
+              <input type="time" value="{{ time }}" onChange="{{ onTime }}" style="{{ sendTimeStyle }}">
+            </label>
+          </div>
+        </div>
+
+        <!-- Brief Format subsection -->
+        <div style="margin-top:32px; padding-top:28px; border-top:1px solid #ECEAE2">
+          <h3 style="margin:0; font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:17px; color:#20241F">Brief Format</h3>
+          <div style="display:flex; flex-direction:column; gap:16px; margin-top:18px">
+            <div style="display:flex; align-items:baseline; gap:18px">
+              <span style="width:76px; flex:none; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:#A6A399">Layout</span>
+              <div style="display:inline-flex; gap:22px">
+                <span onClick="{{ setParagraph }}" style="{{ paragraphTabStyle }}">Paragraph</span>
+                <span onClick="{{ setBullets }}" style="{{ bulletsTabStyle }}">Bullet Points</span>
+              </div>
+            </div>
+            <div style="display:flex; align-items:baseline; gap:18px">
+              <span style="width:76px; flex:none; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:#A6A399">Language</span>
+              <div style="display:inline-flex; gap:20px">
+                <span onClick="{{ setEn }}" style="{{ enTabStyle }}">EN</span>
+                <span onClick="{{ setZh }}" style="{{ zhTabStyle }}">中文</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Topics -->
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-top:40px; padding-top:28px; border-top:1px solid #ECEAE2">
+          <div>
+            <h2 style="margin:0; font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:24px; color:#20241F">News Topics</h2>
+            <p style="margin:6px 0 0; font-size:12px; color:#A6A399">Add topics and the keywords to watch.</p>
+          </div>
+          <div style="display:flex; gap:10px">
+            <button onClick="{{ addTopic }}" style="padding:9px 16px; background:transparent; border:1px solid #D7D4C9; color:#54634F; cursor:pointer; font-size:12px; letter-spacing:0.04em" style-hover="border-color:#54634F">Add Topic</button>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:16px; margin-top:22px">
+          <sc-for list="{{ topics }}" as="t" hint-placeholder-count="1">
+            <div style="border:1px solid #ECEAE2; background:#FCFBF8; padding:20px 22px">
+              <div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px">
+                <div onClick="{{ t.onToggle }}" style="{{ t.toggleStyle }}">
+                  <div style="{{ t.knobStyle }}"></div>
+                </div>
+                <input value="{{ t.name }}" onChange="{{ t.onName }}" style="flex:1; min-width:160px; border:none; background:transparent; font-family:'Newsreader', Georgia, serif; font-size:17px; color:#20241F; padding:2px 0">
+                <label style="display:flex; align-items:center; gap:8px; flex:none">
+                  <span style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#A6A399">Count</span>
+                  <input type="number" min="1" max="9" value="{{ t.count }}" onChange="{{ t.onCount }}" style="width:42px; text-align:center; border:1px solid #DEDCD2; background:#fff; padding:5px 2px; font-size:13px; color:#20241F">
+                </label>
+                <button onClick="{{ t.onRemove }}" title="Remove topic" style="flex:none; width:28px; height:28px; border:none; background:transparent; color:#B8B5AC; cursor:pointer; font-size:15px; line-height:1" style-hover="color:#8C4A3A">×</button>
+              </div>
+              <div style="margin-top:16px; display:flex; flex-direction:column; gap:7px">
+                <span style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#A6A399">Keywords, separated by commas</span>
+                <textarea rows="2" value="{{ t.keywords }}" onChange="{{ t.onKeywords }}" style="resize:vertical; border:1px solid #DEDCD2; background:#fff; padding:10px 12px; font-family:'Newsreader', Georgia, serif; font-size:14.5px; line-height:1.6; color:#54634F"></textarea>
+              </div>
+
+              <!-- Advanced setting -->
+              <div style="margin-top:16px; padding-top:15px; border-top:1px solid #ECEAE2">
+                <button onClick="{{ t.onToggleAdv }}" style="display:flex; align-items:center; gap:9px; background:transparent; border:none; cursor:pointer; padding:0; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#54634F" style-hover="color:#20241F">
+                  <span style="{{ t.advCaret }}">▸</span>
+                  <span>Advanced Setting</span>
+                </button>
+                <sc-if value="{{ t.advOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:15px">
+                    <p style="margin:0 0 12px; font-size:12px; line-height:1.6; color:#A6A399">Select suggested keywords, then add them to this topic’s focus.</p>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px">
+                      <sc-for list="{{ t.suggestions }}" as="w" hint-placeholder-count="6">
+                        <button onClick="{{ w.onToggle }}" style="{{ w.chipStyle }}">{{ w.label }}</button>
+                      </sc-for>
+                    </div>
+                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-top:18px">
+                      <button onClick="{{ t.onAddFocus }}" style="{{ t.addFocusStyle }}">{{ t.addFocusLabel }}</button>
+                      <button onClick="{{ t.onRegen }}" style="padding:8px 15px; background:transparent; border:1px solid #D7D4C9; color:#54634F; cursor:pointer; font-size:12px; letter-spacing:0.04em" style-hover="border-color:#54634F">Regenerate keywords</button>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- Save all footer -->
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:28px; padding-top:22px; border-top:1px solid #ECEAE2">
+          <div style="display:flex; align-items:center; gap:7px; font-size:11.5px; color:#54634F">
+            <span style="font-size:13px">{{ savedGlyph }}</span>
+            <span>{{ savedLabel }}</span>
+          </div>
+          <button onClick="{{ save }}" style="padding:12px 26px; border:1px solid #54634F; background:#344537; color:#F7F5EE; cursor:pointer; font-family:'Newsreader', Georgia, serif; font-size:16px; letter-spacing:0.02em" style-hover="background:#2C382E">Save all</button>
+        </div>
+      </section>
+      </sc-if>
+
+      <!-- Preview card -->
+      <sc-if value="{{ onPreview }}" hint-placeholder-val="{{ false }}">
+      <section data-screen-label="Preview" style="background:#FFFFFF; border:1px solid #ECEAE2; padding:34px 34px 38px; display:flex; flex-direction:column; min-height:520px">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px">
+          <h2 style="margin:0; font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:24px; color:#20241F">Preview</h2>
+          <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; letter-spacing:0.06em; color:#75736A">
+            <span>{{ statusLabel }}</span>
+            <span style="{{ statusDotStyle }}"></span>
+          </div>
+        </div>
+
+        <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:28px; padding:40px 24px">
+            <div style="width:150px; height:110px; background:#FCFBF8; border:1px solid #ECEAE2; box-shadow:6px 6px 0 #F2F0E8; padding:14px; display:flex; flex-direction:column; gap:8px">
+              <div style="height:9px; width:70%; background:#E4E1D6"></div>
+              <div style="display:flex; gap:8px; flex:1">
+                <div style="flex:1.2; background:#EDEBE1"></div>
+                <div style="flex:1; display:flex; flex-direction:column; gap:6px">
+                  <div style="height:6px; background:#EDEBE1"></div>
+                  <div style="height:6px; background:#EDEBE1"></div>
+                  <div style="height:6px; width:70%; background:#EDEBE1"></div>
+                </div>
+              </div>
+            </div>
+            <p style="margin:0; max-width:320px; text-align:center; font-family:'Newsreader', Georgia, serif; font-size:15px; line-height:1.8; color:#A6A399; text-wrap:pretty">Save your settings, then click “Generate&nbsp;Now” to test once. If Gmail sending is not available, this area will show a preview.</p>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ generating }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1; display:flex; align-items:center; justify-content:center">
+            <p style="margin:0; font-family:'Newsreader', Georgia, serif; font-style:italic; font-size:16px; color:#75736A">Composing your brief…</p>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ hasResult }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:26px; display:flex; flex-direction:column">
+            <!-- Masthead -->
+            <div style="border-bottom:1.5px solid #20241F; padding-bottom:16px">
+              <div style="font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:#8C4A3A">Daily Brief</div>
+              <h3 style="margin:8px 0 0; font-family:'Newsreader', Georgia, serif; font-weight:400; font-size:30px; line-height:1; letter-spacing:-0.01em; color:#20241F">{{ mastheadTitle }}</h3>
+              <div style="margin-top:10px; font-size:11.5px; color:#A6A399">Generated {{ resultTimestamp }}</div>
+            </div>
+
+            <!-- Topic sections -->
+            <sc-for list="{{ resultGroups }}" as="g" hint-placeholder-count="2">
+              <section style="padding:26px 0 4px; border-bottom:1px solid #ECEAE2">
+                <h4 style="margin:0 0 4px; font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:19px; color:#20241F">{{ g.topic }}</h4>
+                <sc-for list="{{ g.items }}" as="r" hint-placeholder-count="1">
+                  <article style="padding:16px 0 20px">
+                    <div style="display:flex; align-items:flex-start; gap:10px">
+                      <span style="{{ dotStyle }}"></span>
+                      <div style="font-family:'Newsreader', Georgia, serif; font-weight:500; font-size:17px; line-height:1.35; color:#39463B">{{ r.headline }}</div>
+                    </div>
+                    <p style="{{ summaryStyle }}">{{ r.summary }}</p>
+                    <div style="{{ stampStyle }}">{{ r.stamp }}</div>
+                  </article>
+                </sc-for>
+              </section>
+            </sc-for>
+            <p style="margin:20px 0 0; font-size:11.5px; color:#A6A399">Sent to <span style="color:#54634F">{{ recipient }}</span> daily at {{ time }}.</p>
+          </div>
+        </sc-if>
+      </section>
+      </sc-if>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+class Component extends DCLogic {
+  state = {
+    sender: 'lilianhe347208@gmail.com',
+    recipient: 'zh2652@barnard.edu',
+    time: '08:00',
+    topics: [{
+      id: 1,
+      name: 'Frontier Neuroscience Research',
+      enabled: true,
+      count: 1,
+      keywords: 'neuroscience paper, neuroscience publication, Nature Neuroscience, Neuron, Science neuroscience, Cell neuroscience',
+      advOpen: false,
+      selected: [],
+      websites: [''],
+      suggestions: ['synaptic plasticity', 'connectomics', 'neural circuits', 'optogenetics', 'brain organoids', 'neurodegeneration']
+    }],
+    saved: true,
+    generating: false,
+    result: null,
+    format: 'bullets',
+    lang: 'en',
+    connected: true,
+    sidebarOpen: true,
+    page: 'settings',
+    sendDaily: true
+  };
+
+  field(name) {
+    return (e) => this.setState({ [name]: e.target.value, saved: false });
+  }
+
+  patchTopic(id, patch) {
+    this.setState((s) => ({
+      topics: s.topics.map((t) => (t.id === id ? Object.assign({}, t, patch) : t)),
+      saved: false
+    }));
+  }
+
+  patchTopicUI(id, patch) {
+    this.setState((s) => ({
+      topics: s.topics.map((t) => (t.id === id ? Object.assign({}, t, patch) : t))
+    }));
+  }
+
+  kwPool(name) {
+    const n = (name || '').toLowerCase();
+    const neuro = ['synaptic plasticity', 'connectomics', 'neural circuits', 'optogenetics', 'brain organoids', 'neurodegeneration', 'cognitive mapping', 'fMRI imaging', 'single-cell sequencing', 'dopamine signaling', 'memory consolidation', 'neural prosthetics'];
+    const generic = ['breakthrough study', 'peer-reviewed', 'clinical trial', 'preprint', 'research grant', 'keynote talk', 'replication study', 'meta-analysis', 'open dataset', 'new methodology', 'review article', 'cross-institution'];
+    return (n.indexOf('neuro') >= 0 || n.indexOf('brain') >= 0) ? neuro : generic;
+  }
+
+  pickSuggestions(name) {
+    const pool = this.kwPool(name).slice();
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+    return pool.slice(0, 6);
+  }
+
+  toggleSuggestion(id, w) {
+    this.setState((s) => ({
+      topics: s.topics.map((t) => {
+        if (t.id !== id) return t;
+        const sel = (t.selected || []).slice();
+        const i = sel.indexOf(w);
+        if (i >= 0) sel.splice(i, 1); else sel.push(w);
+        return Object.assign({}, t, { selected: sel });
+      })
+    }));
+  }
+
+  addToFocus(id) {
+    this.setState((s) => {
+      let changed = false;
+      const topics = s.topics.map((t) => {
+        if (t.id !== id) return t;
+        const sel = t.selected || [];
+        if (!sel.length) return t;
+        changed = true;
+        const existing = (t.keywords || '').split(',').map((k) => k.trim()).filter(Boolean);
+        const merged = existing.concat(sel.filter((w) => existing.indexOf(w) < 0));
+        const remaining = (t.suggestions || []).filter((w) => sel.indexOf(w) < 0);
+        return Object.assign({}, t, { keywords: merged.join(', '), selected: [], suggestions: remaining });
+      });
+      return { topics, saved: changed ? false : s.saved };
+    });
+  }
+
+  regen(id) {
+    this.setState((s) => ({
+      topics: s.topics.map((t) => (t.id === id ? Object.assign({}, t, { suggestions: this.pickSuggestions(t.name), selected: [] }) : t))
+    }));
+  }
+
+  setWebsite(id, idx, val) {
+    this.setState((s) => ({
+      saved: false,
+      topics: s.topics.map((t) => {
+        if (t.id !== id) return t;
+        const ws = (t.websites || ['']).slice();
+        ws[idx] = val;
+        return Object.assign({}, t, { websites: ws });
+      })
+    }));
+  }
+
+  removeWebsite(id, idx) {
+    this.setState((s) => ({
+      saved: false,
+      topics: s.topics.map((t) => {
+        if (t.id !== id) return t;
+        const ws = (t.websites || ['']).slice();
+        ws.splice(idx, 1);
+        return Object.assign({}, t, { websites: ws.length ? ws : [''] });
+      })
+    }));
+  }
+
+  renderVals() {
+    const s = this.state;
+    const topics = s.topics.map((t) => ({
+      ...t,
+      toggleStyle: 'flex:none; width:38px; height:22px; border-radius:11px; cursor:pointer; transition:background .2s; padding:2px; box-sizing:border-box; background:' + (t.enabled ? '#344537' : '#D7D4C9'),
+      knobStyle: 'width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .2s; transform:translateX(' + (t.enabled ? '16px' : '0') + ')',
+      onToggle: () => this.patchTopic(t.id, { enabled: !t.enabled }),
+      onName: (e) => this.patchTopic(t.id, { name: e.target.value }),
+      onCount: (e) => this.patchTopic(t.id, { count: Math.max(1, parseInt(e.target.value, 10) || 1) }),
+      onKeywords: (e) => this.patchTopic(t.id, { keywords: e.target.value }),
+      onRemove: () => this.setState((st) => ({ topics: st.topics.filter((x) => x.id !== t.id), saved: false })),
+      advOpen: !!t.advOpen,
+      advCaret: 'display:inline-block; transition:transform .2s; font-size:9px; color:#A6A399; transform:rotate(' + (t.advOpen ? '90deg' : '0deg') + ')',
+      suggestions: (t.suggestions || []).map((w) => ({
+        label: w,
+        onToggle: () => this.toggleSuggestion(t.id, w),
+        chipStyle: ((t.selected || []).indexOf(w) >= 0)
+          ? 'padding:7px 13px; border:1px solid #344537; background:#344537; color:#F7F5EE; cursor:pointer; font-family:\'Newsreader\', Georgia, serif; font-size:13.5px; letter-spacing:0.01em'
+          : 'padding:7px 13px; border:1px solid #DEDCD2; background:#fff; color:#54634F; cursor:pointer; font-family:\'Newsreader\', Georgia, serif; font-size:13.5px; letter-spacing:0.01em'
+      })),
+      addFocusLabel: (t.selected || []).length ? ('Add to focus (' + t.selected.length + ')') : 'Add to focus',
+      addFocusStyle: 'padding:8px 15px; border:1px solid ' + ((t.selected || []).length ? '#54634F' : '#DEDCD2') + '; background:' + ((t.selected || []).length ? '#344537' : '#EDEBE3') + '; color:' + ((t.selected || []).length ? '#F7F5EE' : '#B8B5AC') + '; cursor:' + ((t.selected || []).length ? 'pointer' : 'default') + '; font-size:12px; letter-spacing:0.04em',
+      onToggleAdv: () => this.patchTopicUI(t.id, { advOpen: !t.advOpen }),
+      onAddFocus: () => this.addToFocus(t.id),
+      onRegen: () => this.regen(t.id),
+      websites: (t.websites || ['']).map((val, idx) => ({
+        value: val,
+        onChange: (e) => this.setWebsite(t.id, idx, e.target.value),
+        onRemove: () => this.removeWebsite(t.id, idx)
+      })),
+      onAddWebsite: () => this.patchTopic(t.id, { websites: (t.websites || ['']).concat(['']) })
+    }));
+
+    const status = s.generating ? 'Working' : s.result ? 'Delivered' : 'Ready';
+    const dotColor = s.generating ? '#C2A24B' : '#54634F';
+
+    const lang = s.lang;
+    const isBullets = s.format === 'bullets';
+    const displayGroups = (s.result || []).map((g) => ({
+      topic: g.topic,
+      items: g.items.map((it) => ({
+        headline: it[lang].headline,
+        summary: it[lang].summary,
+        stamp: it.stamp
+      }))
+    }));
+
+    const navCircle = (on) => 'width:26px; height:26px; flex:none; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:\'Newsreader\', Georgia, serif; font-size:13px; border:1px solid ' + (on ? '#54634F' : '#D7D4C9') + '; color:' + (on ? '#54634F' : '#A6A399');
+    const navLabel = (on) => 'font-size:13.5px; letter-spacing:0.01em; color:' + (on ? '#20241F' : '#A6A399');
+
+    const tabBase = 'font-size:13.5px; white-space:nowrap; padding-bottom:4px; cursor:pointer; user-select:none; transition:color .15s, border-color .15s;';
+    const tabOn = tabBase + ' color:#20241F; border-bottom:1.5px solid #8C4A3A;';
+    const tabOff = tabBase + ' color:#B0ADA3; border-bottom:1.5px solid transparent;';
+    const langBase = tabBase;
+    const langOn = tabOn;
+    const langOff = tabOff;
+
+    const dotStyle = isBullets
+      ? 'display:block; flex:none; flex-shrink:0; width:6px; height:6px; box-sizing:border-box; border-radius:50%; background:#8C4A3A; margin-top:8.5px'
+      : 'display:none';
+    const indent = isBullets ? '24px' : '0';
+
+    return {
+      sidebarOpen: s.sidebarOpen,
+      sidebarCollapsed: !s.sidebarOpen,
+      mainStyle: 'flex:1 1 auto; min-width:0; width:100%; max-width:880px; margin:0 auto; padding:52px 56px 64px; box-sizing:border-box',
+      onSettings: s.page === 'settings',
+      onPreview: s.page === 'preview',
+      goSettings: () => this.setState({ page: 'settings' }),
+      goPreview: () => this.setState({ page: 'preview' }),
+      nav1Circle: navCircle(s.page === 'settings'),
+      nav1Label: navLabel(s.page === 'settings'),
+      nav2Circle: navCircle(s.page === 'preview'),
+      nav2Label: navLabel(s.page === 'preview'),
+      collapseSidebar: () => this.setState({ sidebarOpen: false }),
+      expandSidebar: () => this.setState({ sidebarOpen: true }),
+      sender: s.sender,
+      recipient: s.recipient,
+      time: s.time,
+      onSender: this.field('sender'),
+      onRecipient: this.field('recipient'),
+      onTime: this.field('time'),
+      sendDailyToggleStyle: 'flex:none; width:38px; height:22px; border-radius:11px; cursor:pointer; transition:background .2s; padding:2px; box-sizing:border-box; background:' + (s.sendDaily ? '#344537' : '#D7D4C9'),
+      sendDailyKnobStyle: 'width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .2s; transform:translateX(' + (s.sendDaily ? '16px' : '0') + ')',
+      sendTimeStyle: 'border:none; border-bottom:1px solid ' + (s.sendDaily ? '#DEDCD2' : '#ECEAE2') + '; background:transparent; padding:6px 0 8px; font-family:\'Newsreader\', Georgia, serif; font-size:16.5px; color:' + (s.sendDaily ? '#20241F' : '#C4C1B7') + '; width:120px',
+      onSendDaily: () => this.setState((st) => ({ sendDaily: !st.sendDaily, saved: false })),
+      topics: topics,
+      savedGlyph: s.saved ? '\u2713' : '\u25CB',
+      savedLabel: s.saved ? 'All changes saved' : 'Unsaved changes',
+      save: () => this.setState({ saved: true }),
+      addTopic: () => this.setState((st) => ({
+        topics: st.topics.concat([{ id: Date.now(), name: 'New Topic', enabled: true, count: 1, keywords: '', advOpen: false, selected: [], websites: [''], suggestions: this.pickSuggestions('New Topic') }]),
+        saved: false
+      })),
+      generateLabel: s.generating ? 'Generating\u2026' : 'Generate Now',
+      generate: () => {
+        if (s.generating) return;
+        this.setState({ generating: true, result: null });
+        setTimeout(() => {
+          const enabled = this.state.topics.filter((t) => t.enabled);
+          const stampFmt = (d) => d.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+          const groups = (enabled.length ? enabled : this.state.topics).map((t) => {
+            const kws = t.keywords.split(',').map((k) => k.trim()).filter(Boolean);
+            return {
+              topic: t.name,
+              items: Array.from({ length: Math.min(t.count, 3) }, (_, i) => {
+                const kw = kws[i % Math.max(kws.length, 1)];
+                return {
+                  en: {
+                    headline: kw ? 'New findings on ' + kw + ' draw attention this week' : 'Latest developments in ' + t.name,
+                    summary: 'A short plain-English summary of the most relevant coverage matching your keywords, condensed for a two-minute morning read.'
+                  },
+                  zh: {
+                    headline: kw ? '\u5173\u4E8E' + kw + '\u7684\u6700\u65B0\u7814\u7A76\u672C\u5468\u5F15\u53D1\u5173\u6CE8' : t.name + '\u7684\u6700\u65B0\u8FDB\u5C55',
+                    summary: '\u4E00\u6BB5\u7B80\u660E\u6249\u8981\u7684\u4E2D\u6587\u603B\u7ED3\uFF0C\u6C47\u603B\u4E0E\u4F60\u7684\u5173\u952E\u8BCD\u6700\u76F8\u5173\u7684\u62A5\u9053\uFF0C\u6D53\u7F29\u4E3A\u4E24\u5206\u949F\u7684\u6668\u95F4\u9605\u8BFB\u3002'
+                  },
+                  stamp: stampFmt(new Date(Date.now() - (i + 1) * 3600000))
+                };
+              })
+            };
+          });
+          this.setState({ generating: false, result: groups, page: 'preview' });
+        }, 1400);
+      },
+      generating: s.generating,
+      hasResult: !!s.result && !s.generating,
+      showEmpty: !s.result && !s.generating,
+      resultGroups: displayGroups,
+      mastheadTitle: lang === 'zh' ? '\u6BCF\u65E5\u65B0\u95FB' : 'Daily News',
+      dotStyle: dotStyle,
+      summaryStyle: 'margin:9px 0 0 ' + indent + '; font-size:13px; line-height:1.75; color:#75736A; text-wrap:pretty',
+      stampStyle: 'margin:12px 0 0 ' + indent + '; font-size:10.5px; letter-spacing:0.08em; color:#B8B5AC',
+      setParagraph: () => this.setState({ format: 'paragraph' }),
+      setBullets: () => this.setState({ format: 'bullets' }),
+      paragraphTabStyle: isBullets ? tabOff : tabOn,
+      bulletsTabStyle: isBullets ? tabOn : tabOff,
+      setEn: () => this.setState({ lang: 'en' }),
+      setZh: () => this.setState({ lang: 'zh' }),
+      enTabStyle: lang === 'en' ? langOn : langOff,
+      zhTabStyle: lang === 'zh' ? langOn : langOff,
+      disconnect: () => this.setState({ connected: false }),
+      signOut: () => this.setState({ connected: false }),
+      resultTimestamp: new Date().toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }),
+      statusLabel: status,
+      statusDotStyle: 'width:7px; height:7px; border-radius:50%; background:' + dotColor
+    };
+  }
+}
+</script>
+</body>
+</html>

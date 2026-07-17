@@ -1,5 +1,11 @@
 # News Generator Instructions
 
+## Documentation Map
+
+- `docs/architecture.md`: high-level runtime and deployment structure.
+- `docs/features/web-interface.md`: browser UI, Settings/Preview navigation, and visual constraints.
+- `docs/features/`: focused behavior and testing notes for each major feature.
+
 - Before coding, explain the plan and wait for my approval.
 - This file is the current project instruction file.
 - News items must come from the last 10 days only.

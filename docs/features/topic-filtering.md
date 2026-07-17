@@ -9,7 +9,8 @@ Topic filtering decides which categories run, how many items each category needs
 - `server.js`: category defaults, `normalizeCategory`, `clampItemCount`, freshness checks, dedupe helpers, recent-history memory, scoring, ranking, and selection.
 - `api/keywords.js`: Vercel serverless entrypoint for generated keyword suggestions.
 - `public/app.js`: reads category names, enabled state, item counts, focus text, and generated keyword suggestions from the settings form.
-- `public/index.html`: contains the topic controls, including the simple Focus field and advanced keyword controls.
+- `public/index.html`: contains the Morning Desk topic card template, including the Focus field and advanced keyword controls.
+- `docs/features/web-interface.md`: documents the presentation and responsive behavior of those controls.
 - `data/config.json`: local saved categories and topic settings.
 
 ## Data Flow
@@ -40,7 +41,7 @@ Topic filtering decides which categories run, how many items each category needs
 - Research-focused topics still add research terms such as paper, publication, study, research article, and journal, but they do not override Focus keywords.
 - `NEWS_MAX_AGE_DAYS` is currently fixed at 10 days in `server.js`.
 - The UI allows item counts from 1 to 10.
-- The main topic UI shows a natural-language Focus field. Advanced search settings contain selectable generated keyword suggestions and an Add to focus action.
+- The main topic UI shows Focus as a comma-separated keyword textarea. Advanced Setting contains selectable generated keyword suggestions and an Add to focus action.
 
 ## Edge Cases
 
