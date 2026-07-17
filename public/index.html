@@ -4,134 +4,202 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Daily News Brief</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&amp;display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <section id="loginView" class="login-view panel">
-        <div>
-          <p class="kicker">Morning Desk</p>
-          <h1>Daily News Brief</h1>
-          <p class="lede">Sign in with Google so this app can send your Daily News Brief from your Gmail account to the same address.</p>
-        </div>
+    <section id="loginView" class="login-view" hidden>
+      <div class="login-brand" aria-hidden="true">
+        <svg class="sunrise-mark" width="52" height="30" viewBox="0 0 52 30" fill="none">
+          <path d="M14 25 A12 12 0 0 1 38 25"></path>
+          <line x1="6" y1="25" x2="46" y2="25"></line>
+          <line x1="26" y1="0" x2="26" y2="8"></line>
+          <line x1="10" y1="6" x2="15.5" y2="12.5"></line>
+          <line x1="42" y1="6" x2="36.5" y2="12.5"></line>
+          <line x1="0.5" y1="16.5" x2="8.5" y2="19.5"></line>
+          <line x1="51.5" y1="16.5" x2="43.5" y2="19.5"></line>
+        </svg>
+        <span class="brand-wordmark">MORNING DESK</span>
+        <span class="brand-subtitle">DAILY NEWS BRIEF</span>
+      </div>
+      <div class="login-card">
+        <p class="overline rust">Your morning, made simple</p>
+        <h1>Daily News Brief</h1>
+        <span class="title-rule"></span>
+        <p class="page-description">Sign in with Google to create your personal news brief and send it from your Gmail account.</p>
         <div id="authError" class="auth-error" hidden></div>
-        <div class="login-form">
-          <a class="primary-button auth-button" href="/api/auth/google/start">Sign in with Google</a>
-        </div>
-      </section>
+        <a class="primary-button auth-button" href="/api/auth/google/start">Sign in with Google</a>
+      </div>
+      <p class="login-tagline">Simple. Local. Yours.</p>
+    </section>
 
-      <div id="appView" hidden>
-        <section class="masthead">
-          <div>
-            <p class="kicker">Morning Desk</p>
-            <h1>Daily News Brief</h1>
-            <p class="lede">Choose topics, focus, and a send time. The local service will create a simple English news brief and send it through Gmail.</p>
+    <div id="appView" class="app-shell" hidden>
+      <aside id="sidebar" class="sidebar">
+        <button id="collapseSidebar" class="rail-toggle collapse-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar"><span>&lt;</span></button>
+
+        <div class="sidebar-brand">
+          <svg class="sunrise-mark" width="52" height="30" viewBox="0 0 52 30" fill="none" aria-hidden="true">
+            <path d="M14 25 A12 12 0 0 1 38 25"></path>
+            <line x1="6" y1="25" x2="46" y2="25"></line>
+            <line x1="26" y1="0" x2="26" y2="8"></line>
+            <line x1="10" y1="6" x2="15.5" y2="12.5"></line>
+            <line x1="42" y1="6" x2="36.5" y2="12.5"></line>
+            <line x1="0.5" y1="16.5" x2="8.5" y2="19.5"></line>
+            <line x1="51.5" y1="16.5" x2="43.5" y2="19.5"></line>
+          </svg>
+          <span class="brand-wordmark">MORNING DESK</span>
+          <span class="brand-subtitle">DAILY NEWS BRIEF</span>
+        </div>
+
+        <nav class="step-nav" aria-label="Daily News Brief pages">
+          <button id="navSettings" class="step-nav-item active" type="button" aria-current="step">
+            <span class="step-number">1</span>
+            <span>Send Settings</span>
+          </button>
+          <span class="step-connector" aria-hidden="true"></span>
+          <button id="navPreview" class="step-nav-item" type="button">
+            <span class="step-number">2</span>
+            <span>Preview</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+
+        <section class="account-block">
+          <p class="overline">Account</p>
+          <div class="account-email-row">
+            <span class="account-dot" aria-hidden="true"></span>
+            <span id="currentUser" class="account-email"></span>
           </div>
-          <div class="masthead-actions">
-            <span id="currentUser" class="user-pill"></span>
-            <button id="disconnectGoogle" class="ghost-button" type="button">Disconnect Google</button>
-            <button id="signOut" class="ghost-button" type="button">Sign Out</button>
-            <button id="runNow" class="primary-button" type="button">
-              <span>Generate Now</span>
-            </button>
+          <div class="account-actions">
+            <button id="disconnectGoogle" type="button">Disconnect Google</button>
+            <button id="signOut" type="button">Sign out</button>
           </div>
         </section>
+        <p class="sidebar-tagline">Simple. Local. Yours.</p>
+      </aside>
 
-        <section class="workspace">
-          <form id="settingsForm" class="panel settings-panel">
-            <div class="panel-heading">
+      <button id="expandSidebar" class="rail-toggle expand-toggle" type="button" title="Expand sidebar" aria-label="Expand sidebar" hidden><span>&gt;</span></button>
+
+      <main class="main-column">
+        <header class="page-header">
+          <div class="page-heading-copy">
+            <h1>Daily News Brief</h1>
+            <span class="title-rule"></span>
+            <p class="page-description">Choose topics, keywords, and a send time. We’ll create a simple news brief and email it to you via Gmail.</p>
+          </div>
+          <button id="runNow" class="primary-button generate-button" type="button"><span>Generate Now</span></button>
+        </header>
+
+        <div class="page-content">
+          <section id="settingsPage" class="page-card settings-card">
+            <form id="settingsForm">
               <h2>Send Settings</h2>
-              <button class="save-button" type="submit">Save</button>
-            </div>
 
-            <label class="field">
-              <span>Sender Gmail</span>
-              <input id="senderEmail" type="email" readonly placeholder="you@gmail.com" />
-            </label>
-
-            <label class="field">
-              <span>Recipient Gmail</span>
-              <input id="recipientEmail" type="email" readonly placeholder="you@gmail.com" />
-            </label>
-
-            <label class="daily-send-setting">
-              <span class="switch">
-                <input id="dailySendingEnabled" type="checkbox" />
-                <span></span>
-              </span>
-              <span class="daily-send-copy">
-                <strong>Send Every Day</strong>
-                <span>Turn this on and save to allow the scheduled Vercel job to send one news email each day.</span>
-              </span>
-            </label>
-
-            <div class="field-row">
-              <label class="field">
-                <span>Daily Send Time</span>
-                <input id="sendTime" type="time" />
-              </label>
-            </div>
-
-            <div class="category-header">
-              <h2>News Topics</h2>
-              <button id="addCategory" class="ghost-button" type="button">Add Topic</button>
-            </div>
-            <div id="categories" class="category-list"></div>
-          </form>
-
-          <aside class="panel preview-panel">
-            <div class="panel-heading">
-              <h2>Generated Result</h2>
-              <span id="status" class="status-pill">Ready</span>
-            </div>
-            <div class="result-toggles">
-              <div id="formatToggle" class="format-toggle" role="group" aria-label="Summary format">
-                <button id="formatParagraph" class="format-option" type="button" aria-pressed="true">Paragraph</button>
-                <button id="formatBullets" class="format-option" type="button" aria-pressed="false">Bullet Points</button>
+              <div class="send-fields">
+                <label class="line-field">
+                  <span class="overline">Sender Email</span>
+                  <input id="senderEmail" type="email" readonly placeholder="you@gmail.com" />
+                </label>
+                <label class="line-field">
+                  <span class="overline">Recipient Email</span>
+                  <input id="recipientEmail" type="email" readonly placeholder="you@gmail.com" />
+                </label>
+                <div class="daily-send-row">
+                  <label class="switch" title="Enable daily sending">
+                    <input id="dailySendingEnabled" type="checkbox" />
+                    <span aria-hidden="true"></span>
+                  </label>
+                  <label class="switch-label" for="dailySendingEnabled">Send Every Day</label>
+                  <label class="time-field">
+                    <span class="overline">Send Time</span>
+                    <input id="sendTime" type="time" />
+                  </label>
+                </div>
               </div>
-              <div id="languageToggle" class="format-toggle" role="group" aria-label="Language">
-                <button id="langEnglish" class="format-option" type="button" aria-pressed="true" aria-label="English">E</button>
-                <button id="langChinese" class="format-option" type="button" aria-pressed="false" aria-label="中文">中</button>
-              </div>
+
+              <section class="format-section section-divider">
+                <h3>Brief Format</h3>
+                <div class="format-row">
+                  <span class="overline format-label">Layout</span>
+                  <div id="formatToggle" class="text-tabs" role="group" aria-label="Summary format">
+                    <button id="formatParagraph" class="format-option" type="button" aria-pressed="true">Paragraph</button>
+                    <button id="formatBullets" class="format-option" type="button" aria-pressed="false">Bullet Points</button>
+                  </div>
+                </div>
+                <div class="format-row">
+                  <span class="overline format-label">Language</span>
+                  <div class="text-tabs" role="group" aria-label="Language">
+                    <button id="langEnglish" class="format-option" type="button" aria-pressed="true" aria-label="English">EN</button>
+                    <button id="langChinese" class="format-option" type="button" aria-pressed="false" aria-label="中文">中文</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="topics-section section-divider">
+                <div class="topics-heading">
+                  <div>
+                    <h2>News Topics</h2>
+                    <p>Add topics and the keywords to watch.</p>
+                  </div>
+                  <button id="addCategory" class="secondary-button" type="button">Add Topic</button>
+                </div>
+                <div id="categories" class="category-list"></div>
+              </section>
+
+              <footer class="save-footer section-divider">
+                <div id="saveState" class="save-state"><span aria-hidden="true">✓</span><span>All changes saved</span></div>
+                <button class="primary-button save-button" type="submit">Save all</button>
+              </footer>
+            </form>
+          </section>
+
+          <section id="previewPage" class="page-card preview-card" hidden>
+            <div class="preview-heading">
+              <h2>Preview</h2>
+              <div class="preview-status"><span id="status">Ready</span><span id="statusDot" class="status-dot" aria-hidden="true"></span></div>
             </div>
             <div id="preview" class="preview-empty">
-              Save your settings, then click "Generate Now" to test once. If Gmail sending is not available, this area will show a preview.
+              <div class="empty-newspaper" aria-hidden="true">
+                <span class="skeleton-title"></span>
+                <span class="skeleton-body"></span>
+                <span class="skeleton-lines"><i></i><i></i><i></i></span>
+              </div>
+              <p>Save your settings, then click “Generate&nbsp;Now” to test once. If Gmail sending is not available, this area will show a preview.</p>
             </div>
-          </aside>
-        </section>
-      </div>
-    </main>
+          </section>
+        </div>
+      </main>
+    </div>
 
     <template id="categoryTemplate">
       <article class="category-card">
         <div class="category-top">
-          <label class="switch">
+          <label class="switch" title="Enable this topic">
             <input class="category-enabled" type="checkbox" />
-            <span></span>
+            <span aria-hidden="true"></span>
           </label>
-          <input class="category-name" type="text" />
+          <input class="category-name" type="text" aria-label="Topic name" />
           <label class="count-field" title="How many articles to collect for this topic">
-            <span>Count</span>
+            <span class="overline">Count</span>
             <input class="category-count" type="number" min="1" max="10" />
           </label>
-          <button class="icon-button remove-category" type="button" aria-label="Remove">×</button>
+          <button class="remove-category" type="button" aria-label="Remove topic" title="Remove topic">×</button>
         </div>
-        <label class="field compact">
-          <span>Focus</span>
-          <textarea class="category-focus" rows="3" placeholder="Describe what this topic should focus on..."></textarea>
+        <label class="focus-field">
+          <span class="overline">Keywords, separated by commas</span>
+          <textarea class="category-focus" rows="2" placeholder="Describe what this topic should focus on..."></textarea>
         </label>
         <div class="advanced-search">
-          <button class="advanced-toggle" type="button" aria-expanded="false">Advanced search settings</button>
+          <button class="advanced-toggle" type="button" aria-expanded="false"><span class="advanced-caret" aria-hidden="true">▸</span><span>Advanced Setting</span></button>
           <div class="advanced-panel" hidden>
-            <div class="auto-keyword-panel">
-              <div class="keyword-label">
-                <span>Generated keywords · 1–4 words · no repeats</span>
-                <span class="keyword-actions">
-                  <button class="keyword-button add-keywords-to-focus" type="button" disabled>Add to focus</button>
-                  <button class="keyword-button generate-keywords" type="button">Generate keywords</button>
-                </span>
-              </div>
-              <div class="generated-keyword-list"></div>
+            <p>Select suggested keywords of one to three words, then add them to this topic’s focus. New suggestions will not repeat the current focus or earlier suggestions.</p>
+            <div class="generated-keyword-list"></div>
+            <div class="keyword-actions">
+              <button class="keyword-button add-keywords-to-focus" type="button" disabled>Add to focus</button>
+              <button class="secondary-button keyword-button generate-keywords" type="button">Generate keywords</button>
             </div>
           </div>
         </div>

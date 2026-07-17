@@ -6,7 +6,8 @@ import {
   buildSearchQuery,
   filterGeneratedKeywords,
   findArticlesForCategory,
-  generateKeywords
+  generateKeywords,
+  normalizeCategory
 } from "../server.js";
 
 test("Google News query uses only the visible Focus keywords", () => {
@@ -77,6 +78,8 @@ test("generated keywords stay short and exclude existing or repeated topics", ()
     "AI funding",
     "robotics",
     "cloud computing",
+    "biology research breakthroughs",
+    "Nature biology breakthrough papers",
     "this keyword phrase has five words",
     "AI funding updates"
   ], [
@@ -84,8 +87,25 @@ test("generated keywords stay short and exclude existing or repeated topics", ()
     "artificial intelligence chips"
   ]);
 
-  assert.deepEqual(keywords, ["AI funding", "robotics", "cloud computing"]);
-  assert.ok(keywords.every((keyword) => keyword.split(/\s+/).length <= 4));
+  assert.deepEqual(keywords, ["AI funding", "robotics", "cloud computing", "biology research breakthroughs"]);
+  assert.ok(keywords.every((keyword) => keyword.split(/\s+/).length <= 3));
+});
+
+test("saved suggestions for every topic are normalized to the global short rule", () => {
+  const category = normalizeCategory({
+    id: "custom-biology",
+    name: "Frontier Biology Research",
+    focus: "cell biology, gene editing",
+    keywordMode: "auto",
+    generatedKeywords: [
+      "cell biology",
+      "Nature biology breakthrough papers",
+      "Cell Press cell biology studies",
+      "gene editing"
+    ]
+  });
+
+  assert.deepEqual(category.generatedKeywords, ["cell biology", "gene editing"]);
 });
 
 test("keyword model prompt requests short terms and names every excluded topic", async () => {
@@ -119,7 +139,8 @@ test("keyword model prompt requests short terms and names every excluded topic",
     });
     const userText = requestBody.input[0].content[0].text;
 
-    assert.match(requestBody.instructions, /1 to 4 words only/i);
+    assert.match(requestBody.instructions, /1 to 3 words only/i);
+    assert.match(requestBody.instructions, /every topic, including new custom topics/i);
     assert.match(requestBody.instructions, /synonym.*closely related/i);
     assert.match(userText, /AI regulation in US 2026/);
     assert.match(userText, /AI chips/);
