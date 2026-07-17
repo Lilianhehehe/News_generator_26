@@ -2,6 +2,8 @@ import http from "node:http";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync, createReadStream, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import net from "node:net";
+import { lookup } from "node:dns/promises";
 import { fileURLToPath } from "node:url";
 import {
   createCipheriv,
@@ -39,6 +41,15 @@ const NEWS_ARTICLE_TIMEOUT_MS = Number(process.env.NEWS_ARTICLE_TIMEOUT_MS || 20
 const NEWS_MIN_ARTICLE_WORDS = Number(process.env.NEWS_MIN_ARTICLE_WORDS || 250);
 const NEWS_MAX_ARTICLE_CHARS = Number(process.env.NEWS_MAX_ARTICLE_CHARS || 6_500);
 const NEWS_ARTICLE_CHECK_CONCURRENCY = 4;
+const NEWS_MAX_RESPONSE_BYTES = Number(process.env.NEWS_MAX_RESPONSE_BYTES || 5_000_000);
+const NEWS_MAX_REDIRECTS = Number(process.env.NEWS_MAX_REDIRECTS || 5);
+const MAX_REQUEST_BODY_BYTES = Number(process.env.MAX_REQUEST_BODY_BYTES || 1_000_000);
+// Rate limits are expressed as { limit, windowSeconds } per scope. A request must
+// pass all three scopes (user, ip, global) for the matched endpoint group.
+const RATE_LIMIT_USER_PER_MINUTE = Number(process.env.RATE_LIMIT_USER_PER_MINUTE || 20);
+const RATE_LIMIT_USER_RUN_PER_HOUR = Number(process.env.RATE_LIMIT_USER_RUN_PER_HOUR || 12);
+const RATE_LIMIT_IP_PER_MINUTE = Number(process.env.RATE_LIMIT_IP_PER_MINUTE || 40);
+const RATE_LIMIT_GLOBAL_RUN_PER_MINUTE = Number(process.env.RATE_LIMIT_GLOBAL_RUN_PER_MINUTE || 30);
 const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
 const FALLBACK_FEED_SOURCE_PRIORITY = 3;
 const APP_VERSION = "news-generator-2026-07-15-general-sources-v3";
@@ -432,6 +443,98 @@ async function redisCommand(command, ...args) {
   return data.result;
 }
 
+// In-memory fallback rate-limit store: key -> { count, resetAt }.
+const rateLimitMemoryStore = new Map();
+
+function checkRateLimitInMemory(key, limit, windowSeconds) {
+  const now = Date.now();
+  const entry = rateLimitMemoryStore.get(key);
+  if (!entry || entry.resetAt <= now) {
+    rateLimitMemoryStore.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
+    if (rateLimitMemoryStore.size > 10_000) {
+      for (const [existingKey, value] of rateLimitMemoryStore) {
+        if (value.resetAt <= now) rateLimitMemoryStore.delete(existingKey);
+      }
+    }
+    return { allowed: true, remaining: limit - 1, retryAfter: windowSeconds };
+  }
+  entry.count += 1;
+  const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  if (entry.count > limit) {
+    return { allowed: false, remaining: 0, retryAfter };
+  }
+  return { allowed: true, remaining: limit - entry.count, retryAfter };
+}
+
+// Fixed-window counter. Uses Redis (atomic INCR + EXPIRE) when configured so the
+// limit holds across serverless instances; otherwise falls back to per-process memory.
+async function checkRateLimit(key, limit, windowSeconds) {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return { allowed: true, remaining: 0, retryAfter: 0 };
+  }
+  const namespacedKey = `news-generator:ratelimit:${key}`;
+  if (hasRedisStorage()) {
+    try {
+      const count = Number(await redisCommand("INCR", namespacedKey));
+      if (count === 1) {
+        await redisCommand("EXPIRE", namespacedKey, windowSeconds);
+      }
+      return {
+        allowed: count <= limit,
+        remaining: Math.max(0, limit - count),
+        retryAfter: windowSeconds
+      };
+    } catch (error) {
+      // If Redis is momentarily unavailable, fail closed to the in-memory limiter
+      // rather than dropping rate limiting entirely.
+      console.error("Rate limit Redis command failed, using memory fallback:", error.message || error);
+    }
+  }
+  return checkRateLimitInMemory(namespacedKey, limit, windowSeconds);
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+// Enforces the user, ip, and global scopes for an endpoint group. Returns null when
+// allowed, or a rejection object describing the exceeded scope.
+async function enforceRateLimits(scopes) {
+  for (const scope of scopes) {
+    const result = await checkRateLimit(scope.key, scope.limit, scope.windowSeconds);
+    if (!result.allowed) {
+      return { scope: scope.name, retryAfter: result.retryAfter };
+    }
+  }
+  return null;
+}
+
+async function rateLimit(req, res, { email, group }) {
+  const ip = getRequestIp(req);
+  const scopes = [
+    { name: "ip", key: `ip:${ip}:min`, limit: RATE_LIMIT_IP_PER_MINUTE, windowSeconds: 60 }
+  ];
+  if (email) {
+    scopes.push({ name: "user", key: `user:${email}:min`, limit: RATE_LIMIT_USER_PER_MINUTE, windowSeconds: 60 });
+  }
+  if (group === "run") {
+    scopes.push({ name: "global-run", key: "global:run:min", limit: RATE_LIMIT_GLOBAL_RUN_PER_MINUTE, windowSeconds: 60 });
+    if (email) {
+      scopes.push({ name: "user-run", key: `user:${email}:run:hour`, limit: RATE_LIMIT_USER_RUN_PER_HOUR, windowSeconds: 3600 });
+    }
+  }
+  const rejection = await enforceRateLimits(scopes);
+  if (rejection) {
+    res.setHeader("Retry-After", String(rejection.retryAfter));
+    sendJson(res, 429, {
+      error: "Too many requests. Please slow down and try again shortly."
+    });
+    return false;
+  }
+  return true;
+}
+
 async function readJson(filePath, fallback, options = {}) {
   const redisKey = options.redisKey || getRedisKeyForPath(filePath);
   if (redisKey && hasRedisStorage()) {
@@ -661,6 +764,20 @@ function requireAuthSetup() {
   if (!status.configured) {
     throw new Error(`Google OAuth is not configured. Missing: ${status.missing.join(", ")}`);
   }
+}
+
+function safeStringEquals(a, b) {
+  const bufferA = Buffer.from(String(a || ""), "utf8");
+  const bufferB = Buffer.from(String(b || ""), "utf8");
+  if (bufferA.length !== bufferB.length) return false;
+  return timingSafeEqual(bufferA, bufferB);
+}
+
+// Fail closed: /api/cron is rejected unless CRON_SECRET is configured AND matches.
+// An unset CRON_SECRET must never leave the endpoint open.
+function isValidCronSecret(provided) {
+  if (!CRON_SECRET) return false;
+  return safeStringEquals(provided, CRON_SECRET);
 }
 
 function base64UrlEncode(value) {
@@ -1048,11 +1165,31 @@ function sendJson(res, status, data) {
   res.end(body);
 }
 
+class PayloadTooLargeError extends Error {
+  constructor(message = "Request body is too large.") {
+    super(message);
+    this.name = "PayloadTooLargeError";
+    this.statusCode = 413;
+  }
+}
+
 async function readRequestBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
-  if (typeof req.body === "string") return req.body ? JSON.parse(req.body) : {};
-  let body = "";
-  for await (const chunk of req) body += chunk;
+  if (typeof req.body === "string") {
+    if (Buffer.byteLength(req.body) > MAX_REQUEST_BODY_BYTES) throw new PayloadTooLargeError();
+    return req.body ? JSON.parse(req.body) : {};
+  }
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_REQUEST_BODY_BYTES) {
+      throw new PayloadTooLargeError();
+    }
+    chunks.push(buffer);
+  }
+  const body = Buffer.concat(chunks).toString("utf8");
   return body ? JSON.parse(body) : {};
 }
 
@@ -1426,23 +1563,115 @@ async function resolveGoogleNewsPublisherUrl(googleNewsUrl, html) {
   }
 }
 
+function isPrivateIpAddress(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata 169.254.169.254)
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+    if (a >= 224) return true; // multicast and reserved
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const lower = ip.toLowerCase();
+    if (lower === "::1" || lower === "::") return true;
+    if (lower.startsWith("fe80")) return true; // link-local
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
+    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPrivateIpAddress(mapped[1]);
+    return false;
+  }
+  return false;
+}
+
+// SSRF guard: only allow http(s) URLs whose host does not resolve to a private,
+// loopback, link-local, or otherwise internal address. Note: this resolves DNS at
+// check time; a DNS-rebinding attacker could still change the record between this
+// check and the actual fetch (TOCTOU). It blocks the common cases (literal internal
+// IPs, hosts that resolve to internal ranges, cloud metadata endpoints).
+async function assertSafeRemoteUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("article URL is invalid");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("article URL must use http or https");
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(hostname)) {
+    if (isPrivateIpAddress(hostname)) throw new Error("article URL points to an internal address");
+    return parsed;
+  }
+  let addresses;
+  try {
+    addresses = await lookup(hostname, { all: true });
+  } catch {
+    throw new Error("article host could not be resolved");
+  }
+  if (!addresses.length || addresses.some((entry) => isPrivateIpAddress(entry.address))) {
+    throw new Error("article host resolves to an internal address");
+  }
+  return parsed;
+}
+
+async function readBodyWithLimit(response, maxBytes) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text) > maxBytes) throw new Error("article response was too large");
+    return text;
+  }
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.length;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error("article response was too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
+}
+
 async function fetchArticlePage(url) {
   const { controller, timer } = withTimeout(NEWS_ARTICLE_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "accept": "text/html,application/xhtml+xml",
-        "user-agent": "Mozilla/5.0 (compatible; PersonalNewsGenerator/0.2; +https://example.com/news-reader)"
+    let currentUrl = url;
+    let response;
+    for (let redirects = 0; ; redirects += 1) {
+      await assertSafeRemoteUrl(currentUrl);
+      response = await fetch(currentUrl, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "accept": "text/html,application/xhtml+xml",
+          "user-agent": "Mozilla/5.0 (compatible; PersonalNewsGenerator/0.2; +https://example.com/news-reader)"
+        }
+      });
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        if (redirects >= NEWS_MAX_REDIRECTS) throw new Error("article had too many redirects");
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
       }
-    });
+      break;
+    }
     if (!response.ok) throw new Error(`article returned ${response.status}`);
     const contentType = response.headers.get("content-type") || "";
     if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
       throw new Error("article did not return an HTML page");
     }
-    return { html: await response.text(), url: response.url || url };
+    const html = await readBodyWithLimit(response, NEWS_MAX_RESPONSE_BYTES);
+    return { html, url: response.url || currentUrl };
   } finally {
     clearTimeout(timer);
   }
@@ -2919,6 +3148,24 @@ async function schedulerTick() {
 }
 
 async function handleApi(req, res) {
+  try {
+    await dispatchApi(req, res);
+  } catch (error) {
+    if (res.headersSent) throw error;
+    if (error instanceof PayloadTooLargeError) {
+      // The request body was not fully read; close the connection so the client
+      // stops sending instead of reusing a half-consumed socket.
+      res.setHeader("Connection", "close");
+      return sendJson(res, 413, { error: error.message });
+    }
+    if (error instanceof SyntaxError) {
+      return sendJson(res, 400, { error: "Invalid JSON request body." });
+    }
+    throw error;
+  }
+}
+
+async function dispatchApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "GET" && url.pathname === "/api/auth/google/start") {
     return handleGoogleAuthStart(req, res);
@@ -2955,6 +3202,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/keywords") {
     const session = requireSession(req, res);
     if (!session) return;
+    if (!(await rateLimit(req, res, { email: session.email, group: "ai" }))) return;
     const body = await readRequestBody(req);
     const categoryName = cleanKeyword(body.categoryName || "");
     const focus = cleanFocus(body.focus || "");
@@ -2966,6 +3214,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/bullets") {
     const session = requireSession(req, res);
     if (!session) return;
+    if (!(await rateLimit(req, res, { email: session.email, group: "ai" }))) return;
     const body = await readRequestBody(req);
     const paragraph = String(body.paragraph || "").trim();
     if (!paragraph) {
@@ -2985,6 +3234,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/translate") {
     const session = requireSession(req, res);
     if (!session) return;
+    if (!(await rateLimit(req, res, { email: session.email, group: "ai" }))) return;
     const body = await readRequestBody(req);
     const text = String(body.text || "").trim();
     if (!text) {
@@ -3000,6 +3250,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/run") {
     const session = requireSession(req, res);
     if (!session) return;
+    if (!(await rateLimit(req, res, { email: session.email, group: "run" }))) return;
     const body = await readRequestBody(req);
     const result = await runDigest({ sendEmail: body.sendEmail !== false, userEmail: session.email });
     return sendJson(res, 200, result);
@@ -3007,7 +3258,7 @@ async function handleApi(req, res) {
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/cron") {
     const authorization = req.headers.authorization || "";
     const requestSecret = req.headers["x-cron-secret"] || authorization.replace(/^Bearer\s+/i, "");
-    if (CRON_SECRET && requestSecret !== CRON_SECRET) {
+    if (!isValidCronSecret(requestSecret)) {
       return sendJson(res, 401, { error: "Unauthorized" });
     }
     const result = await runScheduledDigest({ requireSendHour: false });
@@ -3029,7 +3280,13 @@ export {
   hasPaywallSignals,
   inspectFreeReadableArticle,
   isSubscriptionOnlyHost,
-  selectFreeReadableArticlesForCategory
+  selectFreeReadableArticlesForCategory,
+  assertSafeRemoteUrl,
+  isPrivateIpAddress,
+  isValidCronSecret,
+  checkRateLimit,
+  readRequestBody,
+  PayloadTooLargeError
 };
 
 if (IS_DIRECT_RUN) {
