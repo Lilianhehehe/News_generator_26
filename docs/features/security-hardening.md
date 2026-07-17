@@ -3,9 +3,11 @@
 ## Purpose
 
 Abuse and attack-surface controls for the public deployment: request rate limiting,
-cron authentication, request body size limits, and SSRF protection on outbound
-article fetches. These protect against runaway third-party API cost, unauthorized
-scheduled sends, memory exhaustion, and internal-network access.
+cron authentication, request body size limits, SSRF protection on outbound article
+fetches, link-protocol filtering, and security response headers. These protect against
+runaway third-party API cost, unauthorized scheduled sends, memory exhaustion,
+internal-network access, click-through XSS via crafted publisher links, and common
+web attacks (clickjacking, MIME sniffing).
 
 ## Related Files
 
@@ -14,7 +16,9 @@ scheduled sends, memory exhaustion, and internal-network access.
   - Cron auth: `isValidCronSecret`, `safeStringEquals` (used by `/api/cron` in `dispatchApi`).
   - Body limit: `readRequestBody`, `PayloadTooLargeError` (mapped to HTTP 413 in `handleApi`).
   - SSRF guard: `assertSafeRemoteUrl`, `isPrivateIpAddress`, `readBodyWithLimit`, and the manual-redirect loop in `fetchArticlePage`.
-- `tests/security.test.js`: unit coverage for all four controls.
+  - Link filtering: `toHttpUrl`, `getCanonicalArticleUrl` (server), `safeHref` (`public/app.js`).
+  - Response headers: `securityHeaders`, `CONTENT_SECURITY_POLICY` (server); the `continue: true` header route in `vercel.json` for static assets on Vercel.
+- `tests/security.test.js`: unit coverage for the controls above.
 
 ## Behavior
 
@@ -37,6 +41,26 @@ scheduled sends, memory exhaustion, and internal-network access.
 
 - `readRequestBody` streams and rejects bodies over `MAX_REQUEST_BODY_BYTES` (default 1 MB)
   with `PayloadTooLargeError`, returned as `413` with `Connection: close`.
+
+### Link-protocol filtering (click-through XSS)
+
+- Untrusted publisher pages can put a `javascript:`/`data:` URL in a `<link rel="canonical">`
+  tag. `getCanonicalArticleUrl` and the final article link now pass through `toHttpUrl`, which
+  returns only `http(s)` URLs; anything else falls back to the safe fetched URL.
+- The rendered links are filtered again at display time: `safeHref` in `public/app.js` for the
+  web preview, and `toHttpUrl` in `renderEmailHtml` for the email.
+
+### Security response headers
+
+- `securityHeaders` adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and HSTS to responses served by this
+  process, plus a strict `Content-Security-Policy` on HTML documents (`script-src 'self'`,
+  `connect-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, etc.).
+- On Vercel, static assets are served by the platform, so the same headers are also declared
+  in `vercel.json` via a `continue: true` header route (kept in `routes` because the project
+  requires explicit `builds`/`routes`).
+- `serveStatic` also enforces the `PUBLIC_DIR` boundary with a trailing separator so a sibling
+  directory whose name starts with `public` cannot be served.
 
 ### SSRF protection on article fetch
 

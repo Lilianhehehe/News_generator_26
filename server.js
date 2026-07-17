@@ -1156,11 +1156,38 @@ async function handleDisconnect(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'"
+].join("; ");
+
+// Baseline security headers applied to responses served directly by this process
+// (local dev, and API responses on Vercel). Static assets on Vercel get the same
+// headers from vercel.json. CSP is only meaningful on HTML documents.
+function securityHeaders({ html = false } = {}) {
+  const headers = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains"
+  };
+  if (html) headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY;
+  return headers;
+}
+
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
+    "content-length": Buffer.byteLength(body),
+    ...securityHeaders()
   });
   res.end(body);
 }
@@ -1198,7 +1225,7 @@ function serveStatic(req, res) {
   const requested = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = path.normalize(path.join(PUBLIC_DIR, requested));
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
@@ -1218,7 +1245,7 @@ function serveStatic(req, res) {
     ".svg": "image/svg+xml"
   }[ext] || "application/octet-stream";
 
-  res.writeHead(200, { "content-type": type });
+  res.writeHead(200, { "content-type": type, ...securityHeaders({ html: ext === ".html" }) });
   createReadStream(filePath).pipe(res);
 }
 
@@ -1489,17 +1516,26 @@ function extractReadableArticleText(html = "") {
   return candidates.sort((a, b) => countArticleWords(b) - countArticleWords(a))[0] || "";
 }
 
+// Returns a normalized http(s) URL string, or "" for anything else (e.g. a
+// javascript:, data:, or file: URL). Untrusted publisher markup can put such URLs
+// in canonical tags; they must never become a stored, clickable article link.
+function toHttpUrl(value = "", base = undefined) {
+  try {
+    const parsed = base ? new URL(value, base) : new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 function getCanonicalArticleUrl(html = "", fallbackUrl = "") {
   const links = [...String(html).matchAll(/<link\b([^>]*)>/gi)];
   for (const [, attributes] of links) {
     if (!/\brel=["'][^"']*canonical/i.test(attributes)) continue;
     const href = attributes.match(/\bhref=["']([^"']+)["']/i)?.[1];
     if (!href) continue;
-    try {
-      return new URL(decodeXml(href), fallbackUrl).toString();
-    } catch {
-      return fallbackUrl;
-    }
+    return toHttpUrl(decodeXml(href), fallbackUrl) || fallbackUrl;
   }
   return fallbackUrl;
 }
@@ -1693,7 +1729,7 @@ async function inspectFreeReadableArticle(article, { companyFocused = false } = 
       canonicalUrl = getCanonicalArticleUrl(page.html, page.url);
     }
 
-    const finalUrl = canonicalUrl || page.url;
+    const finalUrl = toHttpUrl(canonicalUrl || page.url) || page.url;
     if (getUrlHostname(finalUrl) === "news.google.com") {
       return { ok: false, reason: "publisher page could not be resolved" };
     }
@@ -2874,7 +2910,7 @@ function renderEmailHtml(digest) {
   const sections = digest.categories.map((category) => {
     const items = category.articles.map((article) => `
       <li style="margin:0 0 16px 0;">
-        <a href="${escapeHtml(article.link)}" style="color:#165d59;font-size:18px;line-height:1.35;font-weight:700;text-decoration:none;">${escapeHtml(article.title)}</a>
+        <a href="${escapeHtml(toHttpUrl(article.link) || "#")}" style="color:#165d59;font-size:18px;line-height:1.35;font-weight:700;text-decoration:none;">${escapeHtml(article.title)}</a>
         <div style="margin-top:8px;color:#263735;line-height:1.7;white-space:pre-line;">${escapeHtml(article.summary)}</div>
         <div style="margin-top:4px;color:#71817f;font-size:13px;">${escapeHtml(formatArticleTime(article))}</div>
       </li>
@@ -3286,7 +3322,9 @@ export {
   isValidCronSecret,
   checkRateLimit,
   readRequestBody,
-  PayloadTooLargeError
+  PayloadTooLargeError,
+  toHttpUrl,
+  getCanonicalArticleUrl
 };
 
 if (IS_DIRECT_RUN) {

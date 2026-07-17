@@ -12,7 +12,9 @@ const {
   isValidCronSecret,
   checkRateLimit,
   readRequestBody,
-  PayloadTooLargeError
+  PayloadTooLargeError,
+  toHttpUrl,
+  getCanonicalArticleUrl
 } = newsServer;
 
 // --- M-2: SSRF guard ---------------------------------------------------------
@@ -48,6 +50,32 @@ test("assertSafeRemoteUrl rejects literal internal IP hosts", async () => {
 test("assertSafeRemoteUrl allows a normal public https URL", async () => {
   const parsed = await assertSafeRemoteUrl("https://example.com/news/article");
   assert.equal(parsed.hostname, "example.com");
+});
+
+// --- M-3: only http(s) links become clickable article links ------------------
+
+test("toHttpUrl strips dangerous protocols and keeps http(s)", () => {
+  assert.equal(toHttpUrl("javascript:alert(1)"), "");
+  assert.equal(toHttpUrl("data:text/html,<script>1</script>"), "");
+  assert.equal(toHttpUrl("file:///etc/passwd"), "");
+  assert.equal(toHttpUrl("https://example.com/a"), "https://example.com/a");
+  assert.equal(toHttpUrl("/relative", "https://example.com"), "https://example.com/relative");
+});
+
+test("getCanonicalArticleUrl ignores a javascript: canonical and falls back", () => {
+  const html = `<link rel="canonical" href="javascript:alert(document.cookie)">`;
+  assert.equal(
+    getCanonicalArticleUrl(html, "https://news.example.com/story"),
+    "https://news.example.com/story"
+  );
+});
+
+test("getCanonicalArticleUrl accepts a normal http(s) canonical", () => {
+  const html = `<link rel="canonical" href="https://publisher.example.com/real-story">`;
+  assert.equal(
+    getCanonicalArticleUrl(html, "https://news.example.com/story"),
+    "https://publisher.example.com/real-story"
+  );
 });
 
 // --- H-2: cron secret is fail-closed ----------------------------------------
