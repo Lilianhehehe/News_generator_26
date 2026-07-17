@@ -335,17 +335,20 @@ p {
 }
 
 .main-column {
-  width: min(880px, calc(100% - 236px));
+  width: calc(100% - 236px);
+  max-width: 1100px;
   margin: 0 auto;
   padding: 52px 56px 64px;
 }
 
 .app-shell.sidebar-collapsed .main-column {
-  width: min(880px, 100%);
+  width: 100%;
+  max-width: 1100px;
 }
 
 .page-header {
   display: flex;
+  width: 100%;
   align-items: flex-start;
   justify-content: space-between;
   gap: 32px;
@@ -417,7 +420,8 @@ p {
 }
 
 .page-content {
-  max-width: 760px;
+  width: 100%;
+  max-width: none;
   margin-top: 44px;
 }
 

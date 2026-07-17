@@ -26,6 +26,7 @@ The browser interface presents the signed-in user's news settings and generated 
 - Sender and recipient fields remain read-only because both are scoped to the verified Gmail session, even though the design reference shows ordinary text fields.
 - Topic count remains `1–10`, matching server behavior.
 - The sidebar is sticky and collapsible on desktop. At `700px` and below it becomes a compact top rail while keeping account, sign-out, and disconnect controls available.
+- Above the tablet breakpoint, the main column grows with the browser window up to `1100px`. The page header and Settings/Preview card share the same full-width content boundaries so the title and primary action stay aligned with the card edges.
 - Do not copy runtime logic from the design prototype. Production behavior stays in `public/app.js` and the server APIs.
 
 ## Testing
