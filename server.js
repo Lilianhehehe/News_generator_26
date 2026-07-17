@@ -41,7 +41,8 @@ const NEWS_MAX_ARTICLE_CHARS = Number(process.env.NEWS_MAX_ARTICLE_CHARS || 6_50
 const NEWS_ARTICLE_CHECK_CONCURRENCY = 4;
 const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
 const FALLBACK_FEED_SOURCE_PRIORITY = 3;
-const APP_VERSION = "news-generator-2026-07-17-manual-keyword-generation-v3";
+const GENERATED_KEYWORD_MAX_WORDS = 3;
+const APP_VERSION = "news-generator-2026-07-17-short-keywords-all-topics-v4";
 const REDIS_CONFIG_KEY = process.env.NEWS_CONFIG_KEY || "news-generator:config";
 const REDIS_HISTORY_KEY = process.env.NEWS_HISTORY_KEY || "news-generator:history";
 const REDIS_USERS_KEY = process.env.NEWS_USERS_KEY || "news-generator:users";
@@ -522,7 +523,7 @@ function normalizeCategory(category, fallbackCount = 1) {
     ...category,
     focus: hasSavedFocus ? focus : (focus || defaults.focus || ""),
     keywordMode,
-    generatedKeywords: uniqueKeywords(generatedKeywords),
+    generatedKeywords: filterGeneratedKeywords(generatedKeywords),
     customKeywords: uniqueKeywords(customKeywords),
     generatedKeywordsStale: Boolean(category.generatedKeywordsStale),
     itemCount: clampItemCount(category.itemCount ?? defaults.itemCount ?? fallbackCount ?? 1)
@@ -2392,7 +2393,7 @@ function filterGeneratedKeywords(keywords = [], excludedKeywords = []) {
     if (
       !keyword ||
       keyword.length > 40 ||
-      getGeneratedKeywordWordCount(keyword) > 4 ||
+      getGeneratedKeywordWordCount(keyword) > GENERATED_KEYWORD_MAX_WORDS ||
       /[,;|\n]/.test(keyword) ||
       [...excluded, ...accepted].some((existing) => areKeywordsNearDuplicates(keyword, existing))
     ) continue;
@@ -2477,7 +2478,8 @@ async function generateKeywords(categoryName = "", focusText = "", options = {})
           "Generate useful English keyword suggestions for a personal news generator.",
           "The user may choose these suggestions and add them to a Focus field.",
           "Use the topic title and focus text as the source.",
-          "Each keyword must be very short: 1 to 4 words only.",
+          `Each keyword must be very short: 1 to ${GENERATED_KEYWORD_MAX_WORDS} words only.`,
+          "This short-keyword rule applies to every topic, including new custom topics.",
           "Prefer compact search terms such as S&P 500, AI chips, IPO filings, or gene editing.",
           "Do not add a year, date, latest, news, update, article, report, or search unless it is essential to the topic itself.",
           "Do not repeat any excluded keyword or generate a synonym, reordered phrase, longer version, or closely related version of an excluded topic.",
@@ -3186,6 +3188,7 @@ export {
   getFallbackFeedsForCategory,
   getFallbackProfileForCategory,
   handleApi,
+  normalizeCategory,
   runDigest,
   runScheduledDigest,
   convertSummaryToBullets,

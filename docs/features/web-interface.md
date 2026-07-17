@@ -23,7 +23,7 @@ The browser interface presents delivery settings, topic controls, generated-keyw
 ## Topic and Keyword Behavior
 
 - Focus is the source of truth for search. Generated keywords do not affect search until the user selects them and chooses Add to focus.
-- Suggestions contain one to four words and are generated only through Generate keywords or Regenerate keywords.
+- Suggestions contain one to three words for every built-in and custom topic and are generated only through Generate keywords or Regenerate keywords.
 - Regeneration sends Focus terms and previous suggestions as exclusions. The backend removes exact and near duplicates and may return fewer suggestions.
 - Editing or leaving Topic/Focus, selecting a suggestion, and adding it to Focus never call the keyword API.
 - Add Topic categories receive an inferred fallback RSS profile during generation; no source field is required in the form.
@@ -41,6 +41,7 @@ The browser interface presents delivery settings, topic controls, generated-keyw
 ## Assumptions and Edge Cases
 
 - Saved suggestions may be tracked as outdated internally after Topic or Focus changes, but no warning chip is shown and suggestions change only after explicit regeneration.
+- Saved suggestions longer than three words are filtered when configuration is loaded. Focus is not rewritten automatically.
 - An explicitly empty Focus stays empty and skips source searches for that topic.
 - Different verified Gmail users have separate settings and histories.
 

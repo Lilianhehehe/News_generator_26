@@ -40,7 +40,8 @@ Topic filtering decides which categories run, how many items each category needs
 - Search does not add the topic name or hidden research, company, or political terms. Focus flags affect ranking and validation only.
 - The legacy `keywords` field is kept as a compatibility mirror for older saved topics and is used to seed Focus when a saved topic has no Focus text.
 - Supported focus flags include `researchFocused`, `companyFocused`, and `politicalFocused`.
-- Generated suggestions must contain one to four words. Regeneration excludes current Focus terms and the previous suggestion set.
+- Generated suggestions must contain one to three words for every built-in and newly added custom topic. Regeneration excludes current Focus terms and the previous suggestion set.
+- Configuration normalization removes saved suggestions longer than three words without rewriting Focus.
 - Keyword generation is manual. Only the Generate keywords or Regenerate keywords button calls the keyword API; typing, field blur, suggestion selection, and Add to focus do not regenerate suggestions.
 - The backend rejects exact and near duplicates after generation, including reordered phrases, common aliases, and versions that differ only by a year. It can return fewer suggestions instead of repeating a topic.
 - `NEWS_MAX_AGE_DAYS` is currently fixed at 10 days in `server.js`.
@@ -79,7 +80,7 @@ Topic filtering decides which categories run, how many items each category needs
 - Test that generated keyword suggestions not added to Focus are not used for search.
 - Test editing Focus manually and confirming the digest uses Focus terms.
 - Test that search queries contain only the visible Focus keywords plus `when:10d`, even when focus flags are enabled.
-- Test that generated suggestions contain at most four words and exclude exact or near duplicates from Focus and the prior suggestion set.
+- Test that generated suggestions for built-in and custom topics contain at most three words and exclude exact or near duplicates from Focus and the prior suggestion set.
 - Test custom fallback profile inference and Focus matching before RSS candidates are selected.
 - Run `npm test` to verify that company-focused selection skips gates and generic reports and chooses a concrete free article.
 - On Vercel, test that `POST /api/keywords` reaches the shared handler instead of returning 404.
