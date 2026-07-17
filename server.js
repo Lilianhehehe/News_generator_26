@@ -2801,28 +2801,59 @@ function formatArticleTime(article) {
 function renderEmailHtml(digest) {
   const sections = digest.categories.map((category) => {
     const items = category.articles.map((article) => `
-      <li style="margin:0 0 16px 0;">
-        <a href="${escapeHtml(article.link)}" style="color:#165d59;font-size:18px;line-height:1.35;font-weight:700;text-decoration:none;">${escapeHtml(article.title)}</a>
-        <div style="margin-top:8px;color:#263735;line-height:1.7;white-space:pre-line;">${escapeHtml(article.summary)}</div>
-        <div style="margin-top:4px;color:#71817f;font-size:13px;">${escapeHtml(formatArticleTime(article))}</div>
-      </li>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td width="24" valign="top" style="width:24px;padding:21px 0 0;color:#8c4a3a;font-family:Georgia,'Times New Roman',serif;font-size:18px;line-height:1;">&bull;</td>
+          <td valign="top" style="padding:16px 0 20px;">
+            <a href="${escapeHtml(article.link)}" style="color:#39463b;font-family:Georgia,'Times New Roman',serif;font-size:17px;font-weight:500;line-height:1.35;text-decoration:none;">${escapeHtml(article.title)}</a>
+            <div style="margin-top:8px;color:#555850;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.75;white-space:pre-line;">${escapeHtml(article.summary)}</div>
+            <div style="margin-top:7px;color:#b8b5ac;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:10.5px;letter-spacing:.08em;line-height:1.4;text-transform:uppercase;">${escapeHtml(formatArticleTime(article))}</div>
+          </td>
+        </tr>
+      </table>
     `).join("");
     return `
-      <h2 style="margin:28px 0 12px;color:#0f2926;font-size:20px;">${escapeHtml(category.name)}</h2>
-      <ul style="padding-left:20px;margin:0;">${items || `<li>${escapeHtml(category.error || "No relevant articles were found today.")}</li>`}</ul>
+      <tr>
+        <td style="border-bottom:1px solid #eceae2;padding:26px 0 4px;">
+          <h2 style="margin:0 0 4px;color:#20241f;font-family:Georgia,'Times New Roman',serif;font-size:19px;font-weight:500;line-height:1.3;">${escapeHtml(category.name)}</h2>
+          ${items || `<p style="margin:14px 0 20px;color:#a6a399;font-family:Georgia,'Times New Roman',serif;font-size:14px;font-style:italic;line-height:1.65;">${escapeHtml(category.error || "No relevant articles were found today.")}</p>`}
+        </td>
+      </tr>
     `;
   }).join("");
 
-  return `
-    <main style="font-family:Georgia,'Times New Roman','Noto Serif SC',serif;background:#f7f4ea;padding:28px;">
-      <section style="max-width:760px;margin:0 auto;background:#fffef8;border:1px solid #d8d1bf;padding:32px;">
-        <p style="margin:0;color:#7a4b2b;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">Daily Brief</p>
-        <h1 style="margin:8px 0 10px;color:#102c29;font-size:32px;">Daily News</h1>
-        <p style="margin:0;color:#687775;">Generated at: ${escapeHtml(new Date(digest.generatedAt).toLocaleString("en-US"))}</p>
-        ${sections}
-      </section>
-    </main>
-  `;
+  return `<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Daily News</title>
+      </head>
+      <body style="margin:0;padding:0;background:#fbfaf7;color:#20241f;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#fbfaf7" style="width:100%;border-collapse:collapse;background:#fbfaf7;">
+          <tr>
+            <td align="center" style="padding:28px 16px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:100%;max-width:760px;border:1px solid #eceae2;border-collapse:collapse;background:#ffffff;">
+                <tr>
+                  <td style="padding:34px 38px 38px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+                      <tr>
+                        <td style="border-bottom:1.5px solid #20241f;padding:0 0 16px;">
+                          <p style="margin:0;color:#8c4a3a;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:10.5px;letter-spacing:.22em;line-height:1.4;text-transform:uppercase;">Daily Brief</p>
+                          <h1 style="margin:8px 0 0;color:#20241f;font-family:Georgia,'Times New Roman',serif;font-size:30px;font-weight:400;letter-spacing:-.01em;line-height:1;">Daily News</h1>
+                          <p style="margin:10px 0 0;color:#a6a399;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:11.5px;line-height:1.5;">Generated ${escapeHtml(new Date(digest.generatedAt).toLocaleString("en-US"))}</p>
+                        </td>
+                      </tr>
+                      ${sections}
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>`;
 }
 
 function renderTextDigest(digest) {
@@ -3189,6 +3220,7 @@ export {
   getFallbackProfileForCategory,
   handleApi,
   normalizeCategory,
+  renderEmailHtml,
   runDigest,
   runScheduledDigest,
   convertSummaryToBullets,
