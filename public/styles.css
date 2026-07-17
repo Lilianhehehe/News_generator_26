@@ -846,14 +846,6 @@ button.keyword-chip.in-focus:hover {
   background: #f4f2eb;
 }
 
-.keyword-chip.stale {
-  border-color: #dcc7bf;
-  color: var(--rust);
-  background: #faf4f1;
-  font-family: var(--sans);
-  font-size: 11px;
-}
-
 .keyword-empty {
   border-color: transparent;
   padding-left: 0;

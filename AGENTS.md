@@ -2,9 +2,11 @@
 
 ## Documentation Map
 
-- `docs/architecture.md`: high-level runtime and deployment structure.
-- `docs/features/web-interface.md`: browser UI, Settings/Preview navigation, and visual constraints.
-- `docs/features/`: focused behavior and testing notes for each major feature.
+- `docs/architecture.md`: high-level runtime, storage, and deployment structure.
+- `docs/features/web-interface.md`: Settings, Preview, Focus, and generated-keyword behavior.
+- `docs/features/topic-filtering.md`: search terms, freshness, deduplication, ranking, and selection.
+- `docs/features/news-sources.md`: Google News, fallback RSS, and article access checks.
+- `docs/features/`: focused behavior and testing notes for the remaining major features.
 
 - Before coding, explain the plan and wait for my approval.
 - This file is the current project instruction file.

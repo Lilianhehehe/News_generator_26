@@ -36,7 +36,6 @@ let userEmail = "";
 let lastDigestResult = null;
 let summaryFormat = localStorage.getItem("summaryFormat") === "bullets" ? "bullets" : "paragraph";
 let language = localStorage.getItem("resultLanguage") === "zh" ? "zh" : "en";
-const keywordTimers = new WeakMap();
 const bulletCache = new Map();
 const translationCache = new Map();
 let deferredSummaries = new Map();
@@ -153,13 +152,16 @@ function renderKeywordControls(node) {
   const selectedIndexes = new Set(getSelectedKeywordIndexes(node).map(String));
   const generatedList = node.querySelector(".generated-keyword-list");
   const addButton = node.querySelector(".add-keywords-to-focus");
+  const generateButton = node.querySelector(".generate-keywords");
   const focusValue = node.querySelector(".category-focus").value;
-  const isStale = node.dataset.generatedKeywordsStale === "true";
   const addableSelectedCount = generatedKeywords.filter((keyword, index) =>
     selectedIndexes.has(String(index)) && !focusHasKeyword(focusValue, keyword)
   ).length;
   addButton.disabled = addableSelectedCount === 0;
   addButton.textContent = addableSelectedCount ? `Add to focus (${addableSelectedCount})` : "Add to focus";
+  if (!generateButton.disabled) {
+    generateButton.textContent = generatedKeywords.length ? "Regenerate keywords" : "Generate keywords";
+  }
 
   if (!generatedKeywords.length) {
     generatedList.innerHTML = `<span class="keyword-empty">No generated keywords yet.</span>`;
@@ -178,7 +180,7 @@ function renderKeywordControls(node) {
       ].filter(Boolean).join(" ");
     })
     .join("");
-  generatedList.innerHTML = `${chips}${isStale ? `<span class="keyword-chip stale">Will refresh before search</span>` : ""}`;
+  generatedList.innerHTML = chips;
 }
 
 function toggleKeywordSelection(node, index) {
@@ -302,48 +304,33 @@ function renderCategories() {
       addSelectedKeywordsToFocus(node);
     });
     generateKeywordsButton.addEventListener("click", () => {
-      generateKeywordsForCategory(node, { force: true });
+      generateKeywordsForCategory(node);
     });
     nameInput.addEventListener("input", () => {
       node.dataset.generatedKeywordsStale = "true";
       renderKeywordControls(node);
-      scheduleKeywordGeneration(node);
     });
     focusInput.addEventListener("input", () => {
       node.dataset.generatedKeywordsStale = "true";
       renderKeywordControls(node);
-      scheduleKeywordGeneration(node);
-    });
-    nameInput.addEventListener("blur", () => {
-      generateKeywordsForCategory(node);
-    });
-    focusInput.addEventListener("blur", () => {
-      generateKeywordsForCategory(node);
     });
     categories.appendChild(node);
   });
 }
 
-function scheduleKeywordGeneration(node) {
-  if (getNodeGeneratedKeywords(node).length) return;
-
-  clearTimeout(keywordTimers.get(node));
-  keywordTimers.set(node, setTimeout(() => {
-    generateKeywordsForCategory(node);
-  }, 700));
-}
-
-async function generateKeywordsForCategory(node, { force = false } = {}) {
+async function generateKeywordsForCategory(node) {
   const nameInput = node.querySelector(".category-name");
   const focusInput = node.querySelector(".category-focus");
   const button = node.querySelector(".generate-keywords");
   const categoryName = nameInput.value.trim();
   const focus = focusInput.value.trim();
+  const excludedKeywords = [
+    ...parseKeywords(focus),
+    ...getNodeGeneratedKeywords(node)
+  ];
 
   if ((!categoryName || categoryName === "New Category") && !focus) return;
-  if (!force && getNodeGeneratedKeywords(node).length && node.dataset.generatedKeywordsStale !== "true") return;
 
-  clearTimeout(keywordTimers.get(node));
   button.disabled = true;
   setSelectedKeywordIndexes(node, []);
   button.textContent = "Generating";
@@ -352,21 +339,25 @@ async function generateKeywordsForCategory(node, { force = false } = {}) {
   try {
     const result = await api("/api/keywords", {
       method: "POST",
-      body: JSON.stringify({ categoryName: categoryName || "Untitled", focus })
+      body: JSON.stringify({
+        categoryName: categoryName || "Untitled",
+        focus,
+        excludedKeywords
+      })
     });
-    if (Array.isArray(result.keywords) && result.keywords.length) {
+    if (Array.isArray(result.keywords)) {
       setNodeGeneratedKeywords(node, result.keywords);
       node.dataset.generatedKeywordsStale = "false";
       renderKeywordControls(node);
       markDirty();
-      setStatus("Keywords ready");
+      setStatus(result.keywords.length ? "Keywords ready" : "No new keywords");
     }
   } catch (error) {
     setStatus("Keyword failed");
     alert(error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "Regenerate keywords";
+    button.textContent = getNodeGeneratedKeywords(node).length ? "Regenerate keywords" : "Generate keywords";
   }
 }
 
