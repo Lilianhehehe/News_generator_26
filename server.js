@@ -41,7 +41,7 @@ const NEWS_MAX_ARTICLE_CHARS = Number(process.env.NEWS_MAX_ARTICLE_CHARS || 6_50
 const NEWS_ARTICLE_CHECK_CONCURRENCY = 4;
 const GOOGLE_NEWS_SOURCE_PRIORITY = 2;
 const FALLBACK_FEED_SOURCE_PRIORITY = 3;
-const APP_VERSION = "news-generator-2026-07-15-general-sources-v3";
+const APP_VERSION = "news-generator-2026-07-17-manual-keyword-generation-v3";
 const REDIS_CONFIG_KEY = process.env.NEWS_CONFIG_KEY || "news-generator:config";
 const REDIS_HISTORY_KEY = process.env.NEWS_HISTORY_KEY || "news-generator:history";
 const REDIS_USERS_KEY = process.env.NEWS_USERS_KEY || "news-generator:users";
@@ -180,6 +180,36 @@ const fallbackRssFeedsByCategory = {
     { name: "CNBC Business", url: "https://www.cnbc.com/id/10001147/device/rss/rss.html", priority: 4 },
     { name: "Yahoo Finance", url: "https://finance.yahoo.com/news/rssindex", priority: 3 }
   ]
+};
+
+const fallbackRssFeedsByProfile = {
+  neuroscience: fallbackRssFeedsByCategory.neuroscience,
+  science: fallbackRssFeedsByCategory.biology,
+  us_politics: fallbackRssFeedsByCategory.us_major_news,
+  asia_politics: fallbackRssFeedsByCategory.china_major_news,
+  world_politics: fallbackRssFeedsByCategory.world_politics,
+  business: fallbackRssFeedsByCategory.world_economy,
+  technology: [
+    { name: "MIT News AI", url: "https://news.mit.edu/rss/topic/artificial-intelligence2", priority: 5 },
+    { name: "TechCrunch AI", url: "https://techcrunch.com/category/artificial-intelligence/feed/", priority: 4 },
+    { name: "Ars Technica AI", url: "https://feeds.arstechnica.com/arstechnica/technology-lab", priority: 4 },
+    { name: "NPR Technology", url: "https://feeds.npr.org/1019/rss.xml", priority: 3 }
+  ],
+  general: [
+    { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/rss.xml", priority: 5 },
+    { name: "NPR World", url: "https://feeds.npr.org/1004/rss.xml", priority: 4 },
+    { name: "BBC Business", url: "https://feeds.bbci.co.uk/news/business/rss.xml", priority: 4 },
+    { name: "NPR Technology", url: "https://feeds.npr.org/1019/rss.xml", priority: 3 }
+  ]
+};
+
+const fallbackProfileByCategoryId = {
+  neuroscience: "neuroscience",
+  biology: "science",
+  us_major_news: "us_politics",
+  china_major_news: "asia_politics",
+  world_politics: "world_politics",
+  world_economy: "business"
 };
 
 const subscriptionOnlyNewsHosts = [
@@ -485,13 +515,12 @@ function normalizeCategory(category, fallbackCount = 1) {
   const customKeywords = Array.isArray(category.customKeywords)
     ? category.customKeywords
     : (legacyKeywords || []);
-  const focus = typeof category.focus === "string" && category.focus.trim()
-    ? category.focus
-    : (legacyKeywords || []).join(", ");
+  const hasSavedFocus = typeof category.focus === "string";
+  const focus = hasSavedFocus ? cleanFocus(category.focus) : (legacyKeywords || []).join(", ");
   const normalizedCategory = {
     ...defaults,
     ...category,
-    focus: focus || defaults.focus || "",
+    focus: hasSavedFocus ? focus : (focus || defaults.focus || ""),
     keywordMode,
     generatedKeywords: uniqueKeywords(generatedKeywords),
     customKeywords: uniqueKeywords(customKeywords),
@@ -1557,14 +1586,84 @@ async function fetchFeedArticles(feed, limit) {
   }
 }
 
-function getFallbackFeedsForCategory(category) {
-  return fallbackRssFeedsByCategory[category.id] || [];
+function getFallbackProfileForCategory(category = {}) {
+  if (fallbackProfileByCategoryId[category.id]) return fallbackProfileByCategoryId[category.id];
+
+  const name = String(category.name || "").toLowerCase();
+  const focus = String(category.focus || "").toLowerCase();
+  const text = `${name} ${focus}`;
+  if (/(?:neuro|brain|cogniti|mental health|psych)/i.test(name)) return "neuroscience";
+  if (/(?:business|econom|financ|stocks?|markets?|earnings|compan(?:y|ies)|banks?|wall street|s&p|ipo|bonds?)/i.test(name)) {
+    return "business";
+  }
+  if (/(?:biology|biological|medicine|medical|health|genes?|cells?|disease|cancer|genom|immun|microbio|clinical)/i.test(name)) {
+    return "science";
+  }
+  if (/(?:\bai\b|artificial intelligence|technology|software|chips?|semiconductor|robot|cyber|startups?|cloud|data center)/i.test(name)) {
+    return "technology";
+  }
+  if (/(?:neuro|brain|cogniti|mental health|psych)/i.test(text)) return "neuroscience";
+  if (/(?:business|econom|financ|stocks?|markets?|earnings|compan(?:y|ies)|banks?|wall street|s&p|ipo|bonds?|federal reserve)/i.test(text)) {
+    return "business";
+  }
+  if (/(?:biology|biological|medicine|medical|health|genes?|cells?|disease|cancer|genom|immun|microbio|clinical)/i.test(text)) {
+    return "science";
+  }
+  if (/(?:\bai\b|artificial intelligence|technology|software|chips?|semiconductor|robot|cyber|startups?|cloud|data center)/i.test(text)) {
+    return "technology";
+  }
+  if (/(?:science|research|physics|chemistry|climate|space)/i.test(text)) return "science";
+  if (/(?:china|chinese|beijing|taiwan|asia)/i.test(text)) return "asia_politics";
+  if (/(?:united states|\bu\.s\.|\bus\b|white house|congress|supreme court)/i.test(text) && /(?:politic|policy|government|election|law|court)/i.test(text)) {
+    return "us_politics";
+  }
+  if (/(?:politic|policy|government|election|lawmakers?|diplomacy|sanctions?|security)/i.test(text)) {
+    return "world_politics";
+  }
+  return "general";
+}
+
+function getFallbackFeedsForCategory(category = {}) {
+  const dedicatedFeeds = fallbackRssFeedsByCategory[category.id];
+  if (dedicatedFeeds?.length) return dedicatedFeeds;
+  return fallbackRssFeedsByProfile[getFallbackProfileForCategory(category)] || fallbackRssFeedsByProfile.general;
+}
+
+function articleMatchesFocus(article, category) {
+  const focusKeywords = getCategorySearchKeywords(category);
+  if (!focusKeywords.length) return false;
+  const articleTokens = new Set(getCanonicalKeywordTokens(articleHaystack(article)));
+  if (!articleTokens.size) return false;
+
+  return focusKeywords.some((keyword) => {
+    const keywordTokens = getCanonicalKeywordTokens(keyword);
+    if (!keywordTokens.length) return false;
+    const overlap = keywordTokens.filter((token) => articleTokens.has(token)).length;
+    return keywordTokens.length === 1 ? overlap === 1 : overlap >= 2;
+  });
+}
+
+function filterFallbackArticlesByFocus(articles, category) {
+  return (Array.isArray(articles) ? articles : []).filter((article) => articleMatchesFocus(article, category));
 }
 
 async function searchFallbackFeeds(category, limit) {
   const feeds = getFallbackFeedsForCategory(category);
   const results = await Promise.allSettled(feeds.map((feed) => fetchFeedArticles(feed, limit)));
-  return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(`Fallback RSS failed for ${feeds[index]?.name || category.id}:`, result.reason?.message || result.reason);
+    }
+  });
+  const articles = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (fallbackRssFeedsByCategory[category.id]) return articles;
+
+  const matchedArticles = filterFallbackArticlesByFocus(articles, category);
+  console.info(
+    `Fallback RSS profile ${getFallbackProfileForCategory(category)} for ${category.id}: ` +
+    `${articles.length} fresh candidate(s), ${matchedArticles.length} matched Focus.`
+  );
+  return matchedArticles;
 }
 
 function articleHaystack(article) {
@@ -1647,27 +1746,16 @@ function getFocusSearchKeywords(focus = "") {
 }
 
 function getCategorySearchKeywords(category = {}) {
-  const normalized = getFocusSearchKeywords(category.focus || "");
-  return normalized.length ? normalized : uniqueKeywords(category.keywords || []);
+  if (Object.prototype.hasOwnProperty.call(category, "focus")) {
+    return getFocusSearchKeywords(category.focus || "");
+  }
+  return uniqueKeywords(category.keywords || []);
 }
 
 function buildSearchQuery(category) {
   const keywords = getCategorySearchKeywords(category);
-  const joinedKeywords = keywords.length ? keywords.join(" OR ") : getCategoryDisplayName(category);
-
-  if (category.researchFocused) {
-    return `(${joinedKeywords}) (paper OR publication OR study OR "research article" OR journal) when:${NEWS_MAX_AGE_DAYS}d`;
-  }
-
-  if (category.companyFocused) {
-    return `(${joinedKeywords}) (company OR earnings OR shares OR merger OR acquisition OR layoffs OR regulation OR "supply chain") when:${NEWS_MAX_AGE_DAYS}d`;
-  }
-
-  if (category.politicalFocused) {
-    return `(${joinedKeywords}) (politics OR government OR policy OR election OR diplomacy OR congress OR "White House" OR ministry) when:${NEWS_MAX_AGE_DAYS}d`;
-  }
-
-  return `${[getCategoryDisplayName(category), joinedKeywords].filter(Boolean).join(" OR ")} when:${NEWS_MAX_AGE_DAYS}d`;
+  if (!keywords.length) return "";
+  return `(${keywords.join(" OR ")}) when:${NEWS_MAX_AGE_DAYS}d`;
 }
 
 function dedupeArticles(articles) {
@@ -1833,6 +1921,8 @@ async function findArticlesForCategory(category, options = {}) {
   const selectArticlesFn = options.selectArticlesFn || selectFreeReadableArticlesForCategory;
   const query = buildSearchQuery(category);
   const selected = [];
+
+  if (!query) return selected;
 
   const selectFrom = async (candidates) => {
     if (!candidates.length || selected.length >= itemCount) return;
@@ -2223,87 +2313,148 @@ function cleanFocus(value = "") {
     .slice(0, 500);
 }
 
-function fallbackKeywordsForCategory(categoryName = "", focusText = "") {
+function cleanGeneratedKeyword(value = "") {
+  return cleanKeyword(value)
+    .replace(/^\s*(?:[-*•]+|\d+[.)])\s*/, "")
+    .trim();
+}
+
+function getGeneratedKeywordWordCount(value = "") {
+  return String(value).trim().split(/\s+/).filter(Boolean).length;
+}
+
+function getCanonicalKeywordTokens(value = "") {
+  const aliases = {
+    policies: "regulation",
+    policy: "regulation",
+    regulations: "regulation",
+    regulatory: "regulation",
+    rules: "regulation",
+    financing: "funding",
+    investments: "funding",
+    investment: "funding",
+    startups: "startup",
+    semiconductors: "chip",
+    semiconductor: "chip",
+    chips: "chip",
+    medical: "healthcare",
+    medicine: "healthcare",
+    equities: "stock",
+    shares: "stock",
+    stocks: "stock",
+    profits: "earnings",
+    profit: "earnings",
+    results: "earnings",
+    ipos: "ipo",
+    filings: "filing",
+    markets: "market",
+    companies: "company"
+  };
+  const ignored = new Set([
+    "a", "an", "and", "for", "from", "in", "of", "on", "or", "the", "to", "with",
+    "breaking", "latest", "news", "today", "update", "updates"
+  ]);
+  const normalized = String(value)
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/artificial\s+intelligence/g, " ai ")
+    .replace(/united\s+states(?:\s+of\s+america)?/g, " us ")
+    .replace(/s\s*&\s*p\s*500/g, " sp500 ")
+    .replace(/initial\s+public\s+offerings?/g, " ipo ")
+    .replace(/[^\p{L}\p{N}+#]+/gu, " ")
+    .trim();
+  if (!normalized) return [];
+  return [...new Set(normalized.split(/\s+/)
+    .filter((token) => token && !ignored.has(token) && !/^(?:19|20)\d{2}$/.test(token))
+    .map((token) => aliases[token] || token))];
+}
+
+function areKeywordsNearDuplicates(left = "", right = "") {
+  const leftTokens = getCanonicalKeywordTokens(left);
+  const rightTokens = getCanonicalKeywordTokens(right);
+  if (!leftTokens.length || !rightTokens.length) {
+    return normalizeArticleTitleForKey(left) === normalizeArticleTitleForKey(right);
+  }
+  const rightSet = new Set(rightTokens);
+  const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
+  const smallerSize = Math.min(leftTokens.length, rightTokens.length);
+  if (smallerSize === 1) return overlap === 1;
+  return overlap >= 2 && overlap / smallerSize >= 2 / 3;
+}
+
+function filterGeneratedKeywords(keywords = [], excludedKeywords = []) {
+  const excluded = Array.isArray(excludedKeywords)
+    ? excludedKeywords.map(cleanGeneratedKeyword).filter(Boolean).slice(0, 50)
+    : [];
+  const accepted = [];
+  for (const value of Array.isArray(keywords) ? keywords : []) {
+    const keyword = cleanGeneratedKeyword(value);
+    if (
+      !keyword ||
+      keyword.length > 40 ||
+      getGeneratedKeywordWordCount(keyword) > 4 ||
+      /[,;|\n]/.test(keyword) ||
+      [...excluded, ...accepted].some((existing) => areKeywordsNearDuplicates(keyword, existing))
+    ) continue;
+    accepted.push(keyword);
+    if (accepted.length >= 10) break;
+  }
+  return accepted;
+}
+
+function fallbackKeywordsForCategory(categoryName = "", focusText = "", excludedKeywords = []) {
   const name = cleanKeyword(categoryName);
   const focus = cleanFocus(focusText);
   const lower = `${name} ${focus}`.toLowerCase();
-  const base = name && name !== "New Category" ? name : "latest news";
+  let candidates;
 
   if (/(neuro|brain|psych|cognitive|mental)/i.test(lower)) {
-    return uniqueKeywords([
-      `${base} research`,
-      `${base} study`,
-      `${base} paper`,
-      "Nature Neuroscience",
-      "Neuron",
-      "Science neuroscience",
-      "brain research news"
-    ]);
+    candidates = [
+      "brain research", "neural circuits", "brain imaging", "cognition", "mental health",
+      "synaptic plasticity", "neurotechnology", "brain disease", "neurons", "memory",
+      "sleep research", "neurodevelopment", "brain mapping", "neural implants"
+    ];
+  } else if (/(bio|medicine|medical|health|gene|cell|disease|cancer)/i.test(lower)) {
+    candidates = [
+      "cell biology", "gene editing", "cancer biology", "immunology", "genomics",
+      "microbiology", "drug discovery", "human disease", "stem cells", "biotechnology",
+      "molecular biology", "infectious disease", "aging research", "clinical trials"
+    ];
+  } else if (/(business|econom|market|finance|company|stock|earnings)/i.test(lower)) {
+    candidates = [
+      "S&P 500", "Wall Street", "US stocks", "earnings", "inflation", "IPO filings",
+      "interest rates", "mergers", "market regulation", "tech stocks", "Federal Reserve",
+      "bond market", "bank earnings", "economic growth"
+    ];
+  } else if (/(politic|policy|law|election|court|government|diplomacy)/i.test(lower)) {
+    candidates = [
+      "White House", "Congress", "Supreme Court", "elections", "public policy",
+      "foreign policy", "diplomacy", "sanctions", "lawmakers", "court rulings",
+      "executive orders", "voting rights", "trade policy", "national security"
+    ];
+  } else if (/(tech|ai|software|chip|robot|cyber|startup)/i.test(lower)) {
+    candidates = [
+      "AI regulation", "AI chips", "AI funding", "healthcare AI", "AI startups",
+      "cybersecurity", "robotics", "cloud computing", "semiconductors", "AI safety",
+      "open source AI", "data centers", "enterprise AI", "AI research"
+    ];
+  } else {
+    candidates = [
+      "public policy", "new research", "industry changes", "major companies", "global markets",
+      "technology", "healthcare", "science", "security", "regulation", "funding", "innovation"
+    ];
   }
-
-  if (/(bio|medicine|medical|health|gene|cell|disease|cancer)/i.test(lower)) {
-    return uniqueKeywords([
-      `${base} research`,
-      `${base} study`,
-      `${base} paper`,
-      "Nature biology",
-      "Science biology",
-      "Cell biology",
-      "medical research news"
-    ]);
-  }
-
-  if (/(business|econom|market|finance|company|stock|earnings)/i.test(lower)) {
-    return uniqueKeywords([
-      `${base} news`,
-      `${base} companies`,
-      `${base} earnings`,
-      "major companies earnings",
-      "merger acquisition",
-      "company layoffs",
-      "market regulation"
-    ]);
-  }
-
-  if (/(politic|policy|law|election|court|government|diplomacy)/i.test(lower)) {
-    return uniqueKeywords([
-      `${base} politics`,
-      `${base} policy`,
-      `${base} government`,
-      `${base} election`,
-      "diplomacy news",
-      "court decision",
-      "lawmakers"
-    ]);
-  }
-
-  if (/(tech|ai|software|chip|robot|cyber|startup)/i.test(lower)) {
-    return uniqueKeywords([
-      `${base} technology`,
-      `${base} AI`,
-      `${base} companies`,
-      `${base} product`,
-      "technology policy",
-      "cybersecurity news",
-      "startup funding"
-    ]);
-  }
-
-  return uniqueKeywords([
-    `${base} news`,
-    `${base} latest`,
-    `${base} breaking news`,
-    `${base} policy`,
-    `${base} research`,
-    `${base} companies`,
-    `${base} global`
-  ]);
+  return filterGeneratedKeywords(candidates, excludedKeywords);
 }
 
-async function generateKeywords(categoryName = "", focusText = "") {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function generateKeywords(categoryName = "", focusText = "", options = {}) {
+  const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const focus = cleanFocus(focusText);
-  const fallback = fallbackKeywordsForCategory(categoryName, focus);
+  const excludedKeywords = [
+    ...getFocusSearchKeywords(focus),
+    ...(Array.isArray(options.excludedKeywords) ? options.excludedKeywords : [])
+  ].map(cleanGeneratedKeyword).filter(Boolean).slice(0, 50);
+  const fallback = fallbackKeywordsForCategory(categoryName, focus, excludedKeywords);
 
   if (!apiKey) {
     return { keywords: fallback, generatedBy: "fallback" };
@@ -2320,15 +2471,17 @@ async function generateKeywords(categoryName = "", focusText = "") {
       },
       body: JSON.stringify({
         model: OPENAI_MODEL,
-        max_output_tokens: 1200,
+        max_output_tokens: 600,
         reasoning: { effort: "minimal" },
         instructions: [
           "Generate useful English keyword suggestions for a personal news generator.",
           "The user may choose these suggestions and add them to a Focus field.",
           "Use the topic title and focus text as the source.",
-          "Make the keywords specific enough for news and article search.",
-          "Avoid keywords that are too broad.",
-          "Return short comma-style search phrases.",
+          "Each keyword must be very short: 1 to 4 words only.",
+          "Prefer compact search terms such as S&P 500, AI chips, IPO filings, or gene editing.",
+          "Do not add a year, date, latest, news, update, article, report, or search unless it is essential to the topic itself.",
+          "Do not repeat any excluded keyword or generate a synonym, reordered phrase, longer version, or closely related version of an excluded topic.",
+          "Each suggestion must cover a meaningfully different subtopic from every other suggestion.",
           "Use simple English.",
           "Do not include Chinese text.",
           "Do not include explanations."
@@ -2342,7 +2495,8 @@ async function generateKeywords(categoryName = "", focusText = "") {
                 text: [
                   `News topic title: ${categoryName}`,
                   `Focus text: ${focus || "(none provided)"}`,
-                  "Return 6 to 10 focused search keywords as a clean structured list."
+                  `Excluded keywords and topics: ${excludedKeywords.length ? excludedKeywords.join(", ") : "(none)"}`,
+                  "Return 6 to 10 new, non-overlapping search keywords as a clean structured list."
                 ].join("\n")
               }
             ]
@@ -2361,7 +2515,7 @@ async function generateKeywords(categoryName = "", focusText = "") {
                   type: "array",
                   minItems: 6,
                   maxItems: 10,
-                  items: { type: "string" }
+                  items: { type: "string", maxLength: 40 }
                 }
               },
               required: ["keywords"]
@@ -2379,7 +2533,8 @@ async function generateKeywords(categoryName = "", focusText = "") {
 
     const responseJson = await response.json();
     const parsed = JSON.parse(extractResponseText(responseJson));
-    const keywords = uniqueKeywords(parsed.keywords);
+    const modelKeywords = filterGeneratedKeywords(parsed.keywords, excludedKeywords);
+    const keywords = filterGeneratedKeywords([...modelKeywords, ...fallback], excludedKeywords);
     return { keywords: keywords.length ? keywords : fallback, generatedBy: keywords.length ? OPENAI_MODEL : "fallback" };
   } catch (error) {
     return { keywords: fallback, generatedBy: "fallback", warning: error.message || "Keyword generation failed." };
@@ -2958,10 +3113,15 @@ async function handleApi(req, res) {
     const body = await readRequestBody(req);
     const categoryName = cleanKeyword(body.categoryName || "");
     const focus = cleanFocus(body.focus || "");
+    const excludedKeywords = Array.isArray(body.excludedKeywords)
+      ? body.excludedKeywords.map(cleanGeneratedKeyword).filter(Boolean).slice(0, 50)
+      : [];
     if (!categoryName && !focus) {
       return sendJson(res, 400, { error: "Category name or focus is required." });
     }
-    return sendJson(res, 200, await generateKeywords(categoryName || "Custom topic", focus));
+    return sendJson(res, 200, await generateKeywords(categoryName || "Custom topic", focus, {
+      excludedKeywords
+    }));
   }
   if (req.method === "POST" && url.pathname === "/api/bullets") {
     const session = requireSession(req, res);
@@ -3017,6 +3177,14 @@ async function handleApi(req, res) {
 }
 
 export {
+  articleMatchesFocus,
+  areKeywordsNearDuplicates,
+  buildSearchQuery,
+  filterFallbackArticlesByFocus,
+  filterGeneratedKeywords,
+  generateKeywords,
+  getFallbackFeedsForCategory,
+  getFallbackProfileForCategory,
   handleApi,
   runDigest,
   runScheduledDigest,

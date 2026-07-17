@@ -12,7 +12,7 @@ News sources provide candidate articles for each category. The app searches Goog
 
 ## Data Flow
 
-1. A category is converted into a Google News RSS query.
+1. A category is converted into a Google News RSS query that groups only its visible Focus terms with `OR`, followed by the 10-day freshness operator.
 2. Google News RSS is fetched with locale parameters for English U.S. results, and RSS or Atom XML is parsed into normalized article objects.
 3. Articles are filtered for valid publication time within the last 10 days.
 4. Topic filtering ranks the best non-repeated candidates.
@@ -21,8 +21,9 @@ News sources provide candidate articles for each category. The app searches Goog
 7. A page must expose one verifiable article body through article JSON-LD, an `<article>` element, or an article-marked `<main>` with several substantive paragraphs. Text from multiple short article cards is not combined to pass the length check.
 8. Company-focused categories also require a concrete business event plus source-backed details such as a count, amount, percentage, date, quarter, workforce figure, or stated impact. Passing items in the checked batch are ordered by business evidence score.
 9. Only candidates with verified free readable text and the required content quality are selected. The extracted text is kept temporarily as summarization evidence.
-10. If the category still needs more items, fallback RSS feeds are fetched and checked through the same access, freshness, dedupe, ranking, and content-quality flow.
-11. If no verified complete article is available, the category remains empty instead of using a paid, partial, generic, or landing-page result as filler.
+10. If the category still needs more items, fallback RSS feeds are fetched. Built-in topics keep dedicated source lists; custom topics infer a source profile from the visible topic name and Focus.
+11. Custom-topic fallback candidates must match at least one visible Focus term before they enter the normal access, freshness, dedupe, ranking, and content-quality flow.
+12. If no verified complete article is available, the category remains empty instead of using a paid, partial, generic, or landing-page result as filler.
 
 ## Config and Environment
 
@@ -32,8 +33,10 @@ News sources provide candidate articles for each category. The app searches Goog
 - `NEWS_MAX_ARTICLE_CHARS`: maximum verified article text sent to summarization; defaults to 6,500 characters.
 - `NEWS_MAX_AGE_DAYS`: current freshness window of 10 days.
 - Google News source priority is currently hard-coded in `server.js`.
+- Google News search terms come only from Focus. Topic names and focus flags do not add hidden query terms.
 - Fallback feed source priority defaults are currently hard-coded in `server.js`.
-- Fallback feed URLs and priorities are currently hard-coded by category in `server.js`.
+- Fallback feed URLs and priorities are currently hard-coded by built-in category and inferred source profile in `server.js`.
+- Custom source profiles include neuroscience, science, technology, business, U.S. politics, Asia politics, world politics, and general news.
 - The conservative subscription-first host list and access-check concurrency are currently hard-coded in `server.js`.
 - Article-structure rules, landing-page phrases, and the business evidence score are currently hard-coded in `server.js`.
 
@@ -41,6 +44,9 @@ News sources provide candidate articles for each category. The app searches Goog
 
 - A failed Google News search logs an error and does not stop fallback source attempts.
 - Failed fallback feeds are ignored through settled promise results.
+- Every custom category receives a fallback profile. Unknown names and Focus text use the general profile rather than receiving no feeds.
+- Topic names are evaluated before Focus when choosing a profile, so a topic explicitly named AI remains Technology even if one Focus term mentions healthcare.
+- Custom fallback candidates need a one-token match for a one-word Focus term or at least two matching normalized tokens for a longer Focus term.
 - Articles without title or link are removed.
 - RSS and Atom feeds have different link and date fields, so parsing handles both formats.
 - Google News can return links with original source URLs in `guid` or source metadata.
@@ -60,8 +66,11 @@ News sources provide candidate articles for each category. The app searches Goog
 - Test Atom parsing with entry-based feeds and alternate links.
 - Test XML decoding and tag stripping.
 - Test feed fetch timeout behavior.
+- Test that every Focus OR branch is grouped before the `when:10d` operator and no hidden search terms are appended.
 - Test fallback expansion when Google News returns too few usable articles.
 - Test that fallback RSS runs only after Google News is insufficient.
+- Test that custom AI and finance topics receive Technology and Business feeds even though their IDs are random.
+- Test that an unrecognized custom topic receives General feeds and filters unrelated candidates by Focus.
 - Test known subscription-first host rejection.
 - Test `isAccessibleForFree: false` and visible paywall phrase rejection.
 - Test readable text extraction from JSON-LD `articleBody`, `<article>`, and `<main>` markup.

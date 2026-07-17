@@ -431,11 +431,6 @@ button.keyword-chip.in-focus:hover {
   color: var(--muted);
 }
 
-.keyword-chip.stale {
-  color: var(--accent);
-  background: rgba(189, 79, 43, 0.08);
-}
-
 .switch {
   position: relative;
   display: inline-flex;
