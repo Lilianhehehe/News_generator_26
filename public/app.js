@@ -534,7 +534,7 @@ function renderDigest(result) {
   const sections = digest.categories.map((category) => {
     const items = category.articles.map((article) => `
       <article class="digest-article">
-        <a class="digest-headline" href="${escapeHtml(article.link)}" target="_blank" rel="noreferrer">${tText(article.title)}</a>
+        <a class="digest-headline" href="${escapeHtml(safeHref(article.link))}" target="_blank" rel="noreferrer">${tText(article.title)}</a>
         ${articleSummaryHtml(article)}
         <small class="article-stamp">${escapeHtml(formatArticleTime(article))}</small>
       </article>
@@ -621,6 +621,17 @@ function escapeHtml(value = "") {
     "\"": "&quot;",
     "'": "&#39;"
   }[char]));
+}
+
+// Allow only http(s) links in rendered hrefs. escapeHtml alone does not stop a
+// "javascript:" URL, so untrusted article links are filtered here before display.
+function safeHref(value = "") {
+  try {
+    const parsed = new URL(String(value), window.location.href);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "#";
+  } catch {
+    return "#";
+  }
 }
 
 async function saveConfig() {
