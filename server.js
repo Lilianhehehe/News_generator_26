@@ -3339,8 +3339,13 @@ if (IS_DIRECT_RUN) {
         serveStatic(req, res);
       }
     } catch (error) {
+      // Log the full error server-side, but never leak internal details to the client.
       console.error(error);
-      sendJson(res, 500, { error: error.message || "Server error" });
+      if (!res.headersSent) {
+        sendJson(res, 500, { error: "Server error" });
+      } else {
+        res.end();
+      }
     }
   });
 
