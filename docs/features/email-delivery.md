@@ -22,6 +22,14 @@ Email delivery sends a completed digest through the signed-in user's Gmail accou
 7. The email result is saved into that user's history with the digest.
 8. The API response includes the email result for the UI preview.
 
+## Email Presentation
+
+- The HTML email mirrors the Morning Desk web preview with a warm paper background, white editorial card, dark ink headings, rust accents, green article links, and light hairline dividers.
+- Email styles are inline and the layout uses presentation tables so Gmail can render it consistently.
+- Headings use an email-safe Georgia serif stack. Supporting text uses Helvetica fallbacks.
+- Article summaries use `15px` dark gray text with a `1.75` line height for more comfortable reading than the compact web preview.
+- The plain-text email alternative and all digest content remain unchanged by the visual template.
+
 ## Config and Environment
 
 - `GOOGLE_CLIENT_ID`: Google OAuth client id.
@@ -46,3 +54,4 @@ Email delivery sends a completed digest through the signed-in user's Gmail accou
 - Test that failed summarization prevents sending.
 - Test revoked Google authorization and confirm the user is marked reconnect-needed.
 - Test MIME rendering with categories that have articles and categories that only have errors.
+- Run `npm test`; `tests/email-rendering.test.js` checks the core email palette, typography, readable body treatment, escaping, and empty-category styling.

@@ -1,5 +1,13 @@
 # News Generator Instructions
 
+## Documentation Map
+
+- `docs/architecture.md`: high-level runtime, storage, and deployment structure.
+- `docs/features/web-interface.md`: Settings, Preview, Focus, and generated-keyword behavior.
+- `docs/features/topic-filtering.md`: search terms, freshness, deduplication, ranking, and selection.
+- `docs/features/news-sources.md`: Google News, fallback RSS, and article access checks.
+- `docs/features/`: focused behavior and testing notes for the remaining major features.
+
 - Before coding, explain the plan and wait for my approval.
 - This file is the current project instruction file.
 - News items must come from the last 10 days only.
@@ -19,6 +27,7 @@
 - The shared app logic remains in `server.js`. API route files should import and reuse `handleApi` instead of duplicating news generation code.
 - `vercel.json` must keep explicit builds and routes so Vercel serves `public/` as static files and `api/*.js` as serverless functions, instead of using the local `server.js` file as the production root entrypoint.
 - Topic search uses `focus` as the source of truth; `generatedKeywords` are suggestions only, and legacy `keywords` should seed `focus` for old saved topics.
+- Generated keyword suggestions must contain one to three words for every built-in and newly added custom topic; configuration loading should filter older, longer suggestions without rewriting `focus`.
 
 ## News Writing Rules
 

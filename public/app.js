@@ -4,6 +4,14 @@ const authError = document.querySelector("#authError");
 const currentUser = document.querySelector("#currentUser");
 const signOut = document.querySelector("#signOut");
 const disconnectGoogle = document.querySelector("#disconnectGoogle");
+const appShell = document.querySelector("#appView");
+const sidebar = document.querySelector("#sidebar");
+const collapseSidebar = document.querySelector("#collapseSidebar");
+const expandSidebar = document.querySelector("#expandSidebar");
+const navSettings = document.querySelector("#navSettings");
+const navPreview = document.querySelector("#navPreview");
+const settingsPage = document.querySelector("#settingsPage");
+const previewPage = document.querySelector("#previewPage");
 const form = document.querySelector("#settingsForm");
 const senderEmail = document.querySelector("#senderEmail");
 const recipientEmail = document.querySelector("#recipientEmail");
@@ -13,6 +21,8 @@ const categories = document.querySelector("#categories");
 const addCategory = document.querySelector("#addCategory");
 const runNow = document.querySelector("#runNow");
 const statusPill = document.querySelector("#status");
+const statusDot = document.querySelector("#statusDot");
+const saveState = document.querySelector("#saveState");
 const preview = document.querySelector("#preview");
 const template = document.querySelector("#categoryTemplate");
 const formatToggle = document.querySelector("#formatToggle");
@@ -26,13 +36,52 @@ let userEmail = "";
 let lastDigestResult = null;
 let summaryFormat = localStorage.getItem("summaryFormat") === "bullets" ? "bullets" : "paragraph";
 let language = localStorage.getItem("resultLanguage") === "zh" ? "zh" : "en";
-const keywordTimers = new WeakMap();
 const bulletCache = new Map();
 const translationCache = new Map();
 let deferredSummaries = new Map();
 let summaryIdCounter = 0;
 let translateSources = new Map();
 let translateIdCounter = 0;
+let currentPage = "settings";
+
+function emptyPreviewHtml(message = "Save your settings, then click “Generate&nbsp;Now” to test once. If Gmail sending is not available, this area will show a preview.") {
+  return `
+    <div class="empty-newspaper" aria-hidden="true">
+      <span class="skeleton-title"></span>
+      <span class="skeleton-body"></span>
+      <span class="skeleton-lines"><i></i><i></i><i></i></span>
+    </div>
+    <p>${message}</p>
+  `;
+}
+
+function setPage(page) {
+  currentPage = page === "preview" ? "preview" : "settings";
+  const onSettings = currentPage === "settings";
+  settingsPage.hidden = !onSettings;
+  previewPage.hidden = onSettings;
+  runNow.hidden = !onSettings;
+  navSettings.classList.toggle("active", onSettings);
+  navPreview.classList.toggle("active", !onSettings);
+  if (onSettings) {
+    navSettings.setAttribute("aria-current", "step");
+    navPreview.removeAttribute("aria-current");
+  } else {
+    navSettings.removeAttribute("aria-current");
+    navPreview.setAttribute("aria-current", "step");
+  }
+}
+
+function setSavedState(saved) {
+  saveState.classList.toggle("unsaved", !saved);
+  saveState.innerHTML = saved
+    ? '<span aria-hidden="true">✓</span><span>All changes saved</span>'
+    : '<span aria-hidden="true">○</span><span>Unsaved changes</span>';
+}
+
+function markDirty() {
+  setSavedState(false);
+}
 
 function parseKeywords(value = "") {
   return String(value)
@@ -103,13 +152,16 @@ function renderKeywordControls(node) {
   const selectedIndexes = new Set(getSelectedKeywordIndexes(node).map(String));
   const generatedList = node.querySelector(".generated-keyword-list");
   const addButton = node.querySelector(".add-keywords-to-focus");
+  const generateButton = node.querySelector(".generate-keywords");
   const focusValue = node.querySelector(".category-focus").value;
-  const isStale = node.dataset.generatedKeywordsStale === "true";
   const addableSelectedCount = generatedKeywords.filter((keyword, index) =>
     selectedIndexes.has(String(index)) && !focusHasKeyword(focusValue, keyword)
   ).length;
   addButton.disabled = addableSelectedCount === 0;
-  addButton.textContent = addableSelectedCount ? `Add ${addableSelectedCount} to focus` : "Add to focus";
+  addButton.textContent = addableSelectedCount ? `Add to focus (${addableSelectedCount})` : "Add to focus";
+  if (!generateButton.disabled) {
+    generateButton.textContent = generatedKeywords.length ? "Regenerate keywords" : "Generate keywords";
+  }
 
   if (!generatedKeywords.length) {
     generatedList.innerHTML = `<span class="keyword-empty">No generated keywords yet.</span>`;
@@ -128,7 +180,7 @@ function renderKeywordControls(node) {
       ].filter(Boolean).join(" ");
     })
     .join("");
-  generatedList.innerHTML = `${chips}${isStale ? `<span class="keyword-chip stale">Will refresh before search</span>` : ""}`;
+  generatedList.innerHTML = chips;
 }
 
 function toggleKeywordSelection(node, index) {
@@ -159,6 +211,7 @@ function addSelectedKeywordsToFocus(node) {
   if (keywordsToAdd.length) {
     focusInput.value = existing ? `${existing}, ${keywordsToAdd.join(", ")}` : keywordsToAdd.join(", ");
     node.dataset.generatedKeywordsStale = "true";
+    markDirty();
     setStatus("Added to focus");
   } else {
     setStatus("Already in focus");
@@ -170,7 +223,13 @@ function addSelectedKeywordsToFocus(node) {
 }
 
 function setStatus(text) {
-  statusPill.textContent = text;
+  const normalized = String(text).toLowerCase();
+  const isWorking = normalized.includes("generat") || normalized === "saving" || normalized === "loading";
+  const isFailed = normalized.includes("fail") || normalized.includes("error") || normalized.includes("reconnect");
+  const label = text === "Sent" ? "Delivered" : isWorking ? "Working" : isFailed ? "Failed" : "Ready";
+  statusPill.textContent = label;
+  statusDot.classList.toggle("working", isWorking);
+  statusDot.classList.toggle("failed", isFailed);
 }
 
 async function api(path, options = {}) {
@@ -228,6 +287,7 @@ function renderCategories() {
     node.querySelector(".remove-category").addEventListener("click", () => {
       state.categories = state.categories.filter((item) => item.id !== category.id);
       renderCategories();
+      markDirty();
     });
     advancedToggle.addEventListener("click", () => {
       const advancedPanel = node.querySelector(".advanced-panel");
@@ -244,48 +304,33 @@ function renderCategories() {
       addSelectedKeywordsToFocus(node);
     });
     generateKeywordsButton.addEventListener("click", () => {
-      generateKeywordsForCategory(node, { force: true });
+      generateKeywordsForCategory(node);
     });
     nameInput.addEventListener("input", () => {
       node.dataset.generatedKeywordsStale = "true";
       renderKeywordControls(node);
-      scheduleKeywordGeneration(node);
     });
     focusInput.addEventListener("input", () => {
       node.dataset.generatedKeywordsStale = "true";
       renderKeywordControls(node);
-      scheduleKeywordGeneration(node);
-    });
-    nameInput.addEventListener("blur", () => {
-      generateKeywordsForCategory(node);
-    });
-    focusInput.addEventListener("blur", () => {
-      generateKeywordsForCategory(node);
     });
     categories.appendChild(node);
   });
 }
 
-function scheduleKeywordGeneration(node) {
-  if (getNodeGeneratedKeywords(node).length) return;
-
-  clearTimeout(keywordTimers.get(node));
-  keywordTimers.set(node, setTimeout(() => {
-    generateKeywordsForCategory(node);
-  }, 700));
-}
-
-async function generateKeywordsForCategory(node, { force = false } = {}) {
+async function generateKeywordsForCategory(node) {
   const nameInput = node.querySelector(".category-name");
   const focusInput = node.querySelector(".category-focus");
   const button = node.querySelector(".generate-keywords");
   const categoryName = nameInput.value.trim();
   const focus = focusInput.value.trim();
+  const excludedKeywords = [
+    ...parseKeywords(focus),
+    ...getNodeGeneratedKeywords(node)
+  ];
 
   if ((!categoryName || categoryName === "New Category") && !focus) return;
-  if (!force && getNodeGeneratedKeywords(node).length && node.dataset.generatedKeywordsStale !== "true") return;
 
-  clearTimeout(keywordTimers.get(node));
   button.disabled = true;
   setSelectedKeywordIndexes(node, []);
   button.textContent = "Generating";
@@ -294,20 +339,25 @@ async function generateKeywordsForCategory(node, { force = false } = {}) {
   try {
     const result = await api("/api/keywords", {
       method: "POST",
-      body: JSON.stringify({ categoryName: categoryName || "Untitled", focus })
+      body: JSON.stringify({
+        categoryName: categoryName || "Untitled",
+        focus,
+        excludedKeywords
+      })
     });
-    if (Array.isArray(result.keywords) && result.keywords.length) {
+    if (Array.isArray(result.keywords)) {
       setNodeGeneratedKeywords(node, result.keywords);
       node.dataset.generatedKeywordsStale = "false";
       renderKeywordControls(node);
-      setStatus("Keywords ready");
+      markDirty();
+      setStatus(result.keywords.length ? "Keywords ready" : "No new keywords");
     }
   } catch (error) {
     setStatus("Keyword failed");
     alert(error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "Regenerate keywords";
+    button.textContent = getNodeGeneratedKeywords(node).length ? "Regenerate keywords" : "Generate keywords";
   }
 }
 
@@ -483,29 +533,39 @@ function renderDigest(result) {
   const digest = result.digest;
   const sections = digest.categories.map((category) => {
     const items = category.articles.map((article) => `
-      <li>
-        <a href="${escapeHtml(safeHref(article.link))}" target="_blank" rel="noreferrer">${tText(article.title)}</a>
+      <article class="digest-article">
+        <a class="digest-headline" href="${escapeHtml(safeHref(article.link))}" target="_blank" rel="noreferrer">${tText(article.title)}</a>
         ${articleSummaryHtml(article)}
-        <small>${escapeHtml(formatArticleTime(article))}</small>
-      </li>
+        <small class="article-stamp">${escapeHtml(formatArticleTime(article))}</small>
+      </article>
     `).join("");
     const emptyHtml = category.error
       ? tText(category.error)
       : escapeHtml(language === "zh" ? "今天没有找到相关文章。" : "No relevant articles were found today.");
     return `
-      <h3>${tText(category.name)}</h3>
-      <ol>${items || `<li>${emptyHtml}</li>`}</ol>
+      <section class="digest-section">
+        <h4>${tText(category.name)}</h4>
+        ${items || `<p class="empty-topic">${emptyHtml}</p>`}
+      </section>
     `;
   }).join("");
 
-  preview.className = "digest";
+  preview.className = `digest ${summaryFormat}`;
+  const emailMessage = result.emailResult?.message ? `<p>${tText(result.emailResult.message)}</p>` : "";
   const briefingMessage = digest.briefingResult?.message ? `<p>${tText(digest.briefingResult.message)}</p>` : "";
-  const generatedLabel = language === "zh" ? "生成时间：" : "Generated at: ";
+  const mastheadTitle = language === "zh" ? "每日新闻" : "Daily News";
+  const generatedLabel = language === "zh" ? "生成于 " : "Generated ";
+  const footerLead = language === "zh" ? "发送至" : "Sent to";
+  const footerTail = language === "zh" ? "，每日发送时间" : "daily at";
   preview.innerHTML = `
-    <p>${tText(result.emailResult.message)}</p>
-    ${briefingMessage}
-    <p>${escapeHtml(generatedLabel)}${escapeHtml(new Date(digest.generatedAt).toLocaleString(currentLocale()))}</p>
+    ${(emailMessage || briefingMessage) ? `<div class="delivery-notices">${emailMessage}${briefingMessage}</div>` : ""}
+    <div class="digest-masthead">
+      <div class="digest-kicker">Daily Brief</div>
+      <h3>${mastheadTitle}</h3>
+      <div class="digest-generated">${generatedLabel}${escapeHtml(new Date(digest.generatedAt).toLocaleString(currentLocale()))}</div>
+    </div>
     ${sections}
+    <p class="digest-footer">${footerLead} <span>${escapeHtml(userEmail)}</span> ${footerTail} ${escapeHtml(sendTime.value || "08:00")}.</p>
   `;
   fillSummaries();
   if (language === "zh") fillTranslations();
@@ -590,9 +650,39 @@ function resetAppView() {
   translateSources = new Map();
   categories.innerHTML = "";
   preview.className = "preview-empty";
-  preview.textContent = "Save your settings, then click \"Generate Now\" to test once.";
+  preview.innerHTML = emptyPreviewHtml();
+  setPage("settings");
+  setSavedState(true);
   setStatus("Ready");
 }
+
+navSettings.addEventListener("click", () => {
+  setPage("settings");
+});
+
+navPreview.addEventListener("click", () => {
+  setPage("preview");
+});
+
+collapseSidebar.addEventListener("click", () => {
+  sidebar.hidden = true;
+  expandSidebar.hidden = false;
+  appShell.classList.add("sidebar-collapsed");
+});
+
+expandSidebar.addEventListener("click", () => {
+  sidebar.hidden = false;
+  expandSidebar.hidden = true;
+  appShell.classList.remove("sidebar-collapsed");
+});
+
+const mobileSidebarQuery = window.matchMedia("(max-width: 700px)");
+mobileSidebarQuery.addEventListener("change", (event) => {
+  if (!event.matches) return;
+  sidebar.hidden = false;
+  expandSidebar.hidden = true;
+  appShell.classList.remove("sidebar-collapsed");
+});
 
 formatParagraph.addEventListener("click", () => {
   applySummaryFormat("paragraph");
@@ -631,11 +721,20 @@ form.addEventListener("submit", async (event) => {
   setStatus("Saving");
   try {
     await saveConfig();
+    setSavedState(true);
     setStatus("Saved");
   } catch (error) {
     setStatus("Save failed");
     alert(error.message);
   }
+});
+
+form.addEventListener("input", (event) => {
+  if (!event.target.readOnly) markDirty();
+});
+
+form.addEventListener("change", (event) => {
+  if (!event.target.readOnly) markDirty();
 });
 
 addCategory.addEventListener("click", () => {
@@ -652,6 +751,7 @@ addCategory.addEventListener("click", () => {
     keywords: []
   });
   renderCategories();
+  markDirty();
   const newNode = categories.lastElementChild;
   if (newNode) {
     newNode.querySelector(".category-name").select();
@@ -659,10 +759,15 @@ addCategory.addEventListener("click", () => {
 });
 
 runNow.addEventListener("click", async () => {
+  setPage("preview");
   setStatus("Generating");
+  preview.className = "preview-generating";
+  preview.innerHTML = "<p>Composing your brief…</p>";
   runNow.disabled = true;
+  runNow.querySelector("span").textContent = "Generating…";
   try {
     await saveConfig();
+    setSavedState(true);
     const result = await api("/api/run", {
       method: "POST",
       body: JSON.stringify({ sendEmail: true })
@@ -671,9 +776,12 @@ runNow.addEventListener("click", async () => {
     setStatus(result.emailResult.sent ? "Sent" : "Preview");
   } catch (error) {
     setStatus("Failed");
+    preview.className = "preview-empty";
+    preview.innerHTML = emptyPreviewHtml(escapeHtml(error.message || "The brief could not be generated."));
     alert(error.message);
   } finally {
     runNow.disabled = false;
+    runNow.querySelector("span").textContent = "Generate Now";
   }
 });
 
@@ -700,10 +808,12 @@ async function init() {
   dailySendingEnabled.checked = state.dailySendingEnabled === true;
   sendTime.value = state.sendTime || "08:00";
   renderCategories();
+  setPage("settings");
+  setSavedState(true);
   if (session.needsReconnect) {
     setStatus("Reconnect needed");
     preview.className = "preview-empty";
-    preview.textContent = session.reconnectReason || "Please sign in with Google again to allow Gmail sending.";
+    preview.innerHTML = emptyPreviewHtml(escapeHtml(session.reconnectReason || "Please sign in with Google again to allow Gmail sending."));
   } else {
     setStatus("Ready");
   }
